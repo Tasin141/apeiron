@@ -1,5 +1,4 @@
-# Apeiron Unified AI Hub - Hugging Face Spaces Dependencies
-# Clean, minimal, cloud-friendly dependencies only
+# Apeiron Unified AI Hub - Google Colab Compatible Dependencies
 
 # Core web framework
 gradio>=5.0.0
@@ -38,7 +37,15 @@ python-dateutil>=2.8.0
 # Type hints support
 typing-extensions>=4.10.0
 
-# Optional: For advanced features (comment out if not needed)
+# Colab-specific
+google-colab>=1.0.0
+
+# Optional: For advanced features
 # crawl4ai>=0.4.0
 # playwright>=1.40.0
 # duckduckgo-search>=5.3.0
+# ccxt>=4.2.0
+# finrl>=1.7.0
+# yfinance>=0.2.36
+# reactive-resume>=1.0.0
+# typst>=0.2.0
