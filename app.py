@@ -470,7 +470,8 @@ def create_interface():
                 processed.append(result)
             
             return f"✅ {len(processed)} file(s) uploaded", processed
-async def chat_handler(message, history, files, planning_phase_flag, conv_hist, current_plan, lang):
+        
+        async def chat_handler(message, history, files, planning_phase_flag, conv_hist, current_plan, lang):
             """Main chat handler with agent orchestration."""
             
             if not message.strip() and not files:
