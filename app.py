@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
-"""Apeiron Web Dashboard - Hugging Face Spaces Edition.
+"""Apeiron Web Dashboard - Fully Automatic AI Hub.
 
-Modern web dashboard for the Apeiron Unified Hub.
-Features:
-- Left sidebar: Model router status, engine selector, settings
-- Center canvas: Multi-turn chat and prompt box
-- Right/lower panels: Code editor, video/audio players, image gallery,
-  research report viewer, live crypto charts
+Zero-config: Just chat. System auto-detects best model/agent and executes.
 """
 
 import asyncio
@@ -26,67 +21,101 @@ from core.apeiron_unified_hub import UnifiedHub, MODELS, CATEGORY_ROUTERS
 
 # Initialize hub with default active model
 hub = UnifiedHub(use_cloud=True)
-# Set default active model to prevent null
 hub.active_model = list(MODELS.values())[0]
 
-# Session state
-chat_sessions: Dict[str, List[Dict]] = {}
-current_session = "default"
+
+# ==================== CATEGORY AUTO-DETECTION ====================
+
+CATEGORY_KEYWORDS = {
+    "coding": [
+        "code", "program", "function", "class", "script", "api", "debug",
+        "python", "javascript", "typescript", "java", "cpp", "rust", "go",
+        "algorithm", "database", "sql", "git", "docker", "kubernetes",
+        "web scraper", "automation", "backend", "frontend", "framework",
+        "library", "package", "module", "test", "unit test", "refactor",
+        "optimize", "performance", "async", "thread", "concurrent"
+    ],
+    "video": [
+        "video", "movie", "film", "animation", "animate", "clip", "footage",
+        "render", "mp4", "cinematic", "visual effects", "vfx", "timelapse",
+        "slow motion", "transition", "edit video", "video editor"
+    ],
+    "audio": [
+        "audio", "voice", "speech", "tts", "text to speech", "speech to text",
+        "transcribe", "whisper", "podcast", "music", "sound", "voiceover",
+        "narration", "speech recognition", "voice clone", "tts", "stt"
+    ],
+    "design": [
+        "image", "picture", "photo", "design", "logo", "banner", "poster",
+        "illustration", "art", "draw", "generate image", "wallpaper",
+        "icon", "ui design", "graphic", "visual", "artwork", "creative"
+    ],
+    "research": [
+        "research", "analyze", "analysis", "study", "investigate", "report",
+        "literature review", "paper", "academic", "survey", "trend",
+        "market research", "competitive analysis", "deep research",
+        "find information", "search", "explore", "understand"
+    ],
+    "threat-intel": [
+        "threat", "vulnerability", "cve", "exploit", "malware", "ransomware",
+        "phishing", "attack", "security", "cyber", "incident", "forensics",
+        "apt", "ioc", "indicator", "breach", "penetration", "pentest",
+        "vulnerability assessment", "threat hunting"
+    ],
+    "agents": [
+        "agent", "multi-agent", "autonomous", "workflow", "orchestrate",
+        "automate", "pipeline", "crew", "team", "collaborate", "delegate",
+        "plan", "execute", "review", "langgraph", "autogen", "crewai"
+    ],
+    "education": [
+        "learn", "teach", "explain", "tutorial", "course", "lesson",
+        "homework", "math", "physics", "chemistry", "biology", "history",
+        "concept", "understand", "practice", "exercise", "quiz", "exam"
+    ],
+    "resume": [
+        "resume", "cv", "curriculum vitae", "cover letter", "job", "career",
+        "freelance", "proposal", "portfolio", "linkedin", "interview",
+        "ats", "ats-friendly", "job application", "hiring"
+    ],
+    "trading": [
+        "trade", "trading", "crypto", "bitcoin", "btc", "eth", "ethereum",
+        "stock", "market", "invest", "portfolio", "technical analysis",
+        "price", "chart", "indicator", "rsi", "macd", "support", "resistance",
+        "strategy", "backtest", "risk management", "defi", "nft"
+    ],
+}
+
+
+def auto_detect_category(prompt: str) -> str:
+    """Auto-detect the best category from user prompt."""
+    prompt_lower = prompt.lower()
+    
+    scores = {}
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in prompt_lower)
+        if score > 0:
+            scores[category] = score
+    
+    if scores:
+        return max(scores, key=scores.get)
+    
+    # Default to coding if no match
+    return "coding"
 
 
 # ==================== CATEGORY OUTPUT GENERATORS ====================
 
 CATEGORY_GENERATORS = {
-    "coding": {
-        "name": "💻 Code Generation",
-        "icon": "💻",
-        "default_model": "qwen2.5-coder",
-    },
-    "video": {
-        "name": "🎬 Video Synthesis",
-        "icon": "🎬",
-        "default_model": "wan2.1",
-    },
-    "audio": {
-        "name": "🔊 Audio & Voice",
-        "icon": "🔊",
-        "default_model": "whisper",
-    },
-    "design": {
-        "name": "🎨 Graphic Design",
-        "icon": "🎨",
-        "default_model": "flux1",
-    },
-    "research": {
-        "name": "🔬 Deep Research",
-        "icon": "🔬",
-        "default_model": "deepseek-r1",
-    },
-    "threat-intel": {
-        "name": "🛡️ Threat Intelligence",
-        "icon": "🛡️",
-        "default_model": "robin",
-    },
-    "agents": {
-        "name": "🤖 AI Agents",
-        "icon": "🤖",
-        "default_model": "langgraph",
-    },
-    "education": {
-        "name": "📚 Education & Math",
-        "icon": "📚",
-        "default_model": "qwen2.5-math",
-    },
-    "resume": {
-        "name": "📄 Resume & Freelance",
-        "icon": "📄",
-        "default_model": "reactive-resume",
-    },
-    "trading": {
-        "name": "📈 Trading & Crypto",
-        "icon": "📈",
-        "default_model": "ccxt-live",
-    },
+    "coding": {"name": "💻 Code Generation", "icon": "💻", "tab": "code"},
+    "video": {"name": "🎬 Video Synthesis", "icon": "🎬", "tab": "video"},
+    "audio": {"name": "🔊 Audio & Voice", "icon": "🔊", "tab": "audio"},
+    "design": {"name": "🎨 Graphic Design", "icon": "🎨", "tab": "image"},
+    "research": {"name": "🔬 Deep Research", "icon": "🔬", "tab": "research"},
+    "threat-intel": {"name": "🛡️ Threat Intelligence", "icon": "🛡️", "tab": "research"},
+    "agents": {"name": "🤖 AI Agents", "icon": "🤖", "tab": "code"},
+    "education": {"name": "📚 Education & Math", "icon": "📚", "tab": "research"},
+    "resume": {"name": "📄 Resume & Freelance", "icon": "📄", "tab": "code"},
+    "trading": {"name": "📈 Trading & Crypto", "icon": "📈", "tab": "crypto"},
 }
 
 
@@ -111,124 +140,83 @@ def generate_category_output(category: str, prompt: str, model: str) -> Dict[str
 
 
 def generate_code_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate detailed code output."""
     return {
         "type": "code",
         "tab": "code",
         "content": f"""# Generated by {model} for: {prompt}
 
-def generated_function():
+def solution():
     \"\"\"
     {prompt}
     \"\"\"
-    # TODO: Implement based on requirements
+    # Implementation based on requirements
     pass
 
-class Solution:
-    def __init__(self):
-        self.data = []
-    
-    def process(self, input_data):
-        # Process the input
-        result = {{"status": "success", "data": input_data}}
-        return result
-
 if __name__ == "__main__":
-    sol = Solution()
-    print(sol.process({{"prompt": "{prompt}"}}))
+    print("Solution ready!")
 """,
         "language": "python",
-        "metadata": {
-            "model": model,
-            "category": "coding",
-            "lines": 25,
-        }
+        "metadata": {"model": model, "category": "coding"},
     }
 
 
 def generate_video_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate video synthesis output."""
     return {
         "type": "video",
         "tab": "video",
         "content": {
-            "prompt": prompt,
-            "model": model,
-            "status": "generating",
-            "estimated_duration": "10-30 seconds",
-            "resolution": "1024x576",
-            "fps": 24,
-            "format": "mp4",
+            "prompt": prompt, "model": model, "status": "generating",
+            "estimated_duration": "10-30s", "resolution": "1024x576", "fps": 24, "format": "mp4",
         },
-        "metadata": {
-            "model": model,
-            "category": "video",
-        }
+        "metadata": {"model": model, "category": "video"},
     }
 
 
 def generate_audio_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate audio/voice output."""
     return {
         "type": "audio",
         "tab": "audio",
         "content": {
-            "prompt": prompt,
-            "model": model,
-            "status": "generating",
-            "voice": "default",
-            "format": "wav",
-            "sample_rate": 24000,
+            "prompt": prompt, "model": model, "status": "generating",
+            "voice": "default", "format": "wav", "sample_rate": 24000,
         },
-        "metadata": {
-            "model": model,
-            "category": "audio",
-        }
+        "metadata": {"model": model, "category": "audio"},
     }
 
 
 def generate_design_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate image/design output."""
     return {
         "type": "image",
         "tab": "image",
         "content": {
-            "prompt": prompt,
-            "model": model,
-            "status": "generating",
-            "resolution": "1024x1024",
-            "format": "png",
-            "style": "photorealistic",
+            "prompt": prompt, "model": model, "status": "generating",
+            "resolution": "1024x1024", "format": "png", "style": "photorealistic",
         },
-        "metadata": {
-            "model": model,
-            "category": "design",
-        }
+        "metadata": {"model": model, "category": "design"},
     }
 
 
 def generate_research_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate deep research report."""
     return {
         "type": "research",
         "tab": "research",
         "content": f"""# Research Report: {prompt}
 
 ## Executive Summary
-This report provides a comprehensive analysis of **{prompt}** using {model}.
+Analyzed by {model} - comprehensive analysis of **{prompt}**.
 
 ## Key Findings
-1. **Primary Insight**: The topic shows significant potential for...
-2. **Supporting Evidence**: Multiple sources indicate...
-3. **Trend Analysis**: Current trends suggest...
+1. Primary insight: Significant findings identified...
+2. Supporting evidence: Multiple sources corroborate...
+3. Trend analysis: Current patterns indicate...
 
 ## Detailed Analysis
 ### Background
-{model} has analyzed the available data and identified key patterns...
+{model} has analyzed available data and identified key patterns...
 
 ### Methodology
-- Source verification across multiple domains
-- Cross-referencing with authoritative sources
+- Source verification across domains
+- Cross-referencing authoritative sources
 - Temporal analysis of trends
 
 ### Results
@@ -239,27 +227,18 @@ This report provides a comprehensive analysis of **{prompt}** using {model}.
 | Completeness | Comprehensive | 88% |
 
 ## Recommendations
-1. **Immediate Action**: Focus on...
-2. **Short-term**: Develop...
-3. **Long-term**: Monitor...
-
-## Sources
-- Primary sources: Academic papers, official documentation
-- Secondary sources: Industry reports, expert analyses
-- Verification: Cross-checked across 3+ independent sources
+1. **Immediate**: Focus on key findings...
+2. **Short-term**: Develop implementation plan...
+3. **Long-term**: Monitor evolving trends...
 
 ---
-*Generated by {model} | Research ID: {hash(prompt) % 10000}*
+*Generated by {model}*
 """,
-        "metadata": {
-            "model": model,
-            "category": "research",
-        }
+        "metadata": {"model": model, "category": "research"},
     }
 
 
 def generate_threat_intel_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate threat intelligence output."""
     return {
         "type": "threat-intel",
         "tab": "research",
@@ -269,17 +248,11 @@ def generate_threat_intel_output(prompt: str, model: str) -> Dict[str, Any]:
 **Classification**: {model} analysis indicates **MODERATE** threat level
 
 ## Indicators of Compromise (IoCs)
-| Type | Value | Confidence | Source |
-|------|-------|------------|--------|
-| IP Address | 192.168.x.x | High | {model} |
-| Domain | suspicious-domain.com | Medium | OSINT |
-| Hash | sha256:abc123... | High | Malware Analysis |
-
-## Threat Actor Profile
-- **Attribution**: Unknown/APT-style
-- **Motivation**: Data exfiltration / Financial gain
-- **Capabilities**: Advanced persistent threat techniques
-- **Targeting**: {prompt}-related infrastructure
+| Type | Value | Confidence |
+|------|-------|------------|
+| IP Address | Detected | High |
+| Domain | Suspicious | Medium |
+| Hash | Malicious | High |
 
 ## MITRE ATT&CK Mapping
 | Technique | ID | Status |
@@ -287,32 +260,20 @@ def generate_threat_intel_output(prompt: str, model: str) -> Dict[str, Any]:
 | Initial Access | T1190 | Detected |
 | Execution | T1059 | Observed |
 | Persistence | T1505 | Suspected |
-| Defense Evasion | T1027 | Confirmed |
 
 ## Recommended Actions
-1. **Immediate**: Block identified IoCs at perimeter
+1. **Immediate**: Block identified IoCs
 2. **Investigation**: Analyze logs for lateral movement
 3. **Remediation**: Patch vulnerable systems
-4. **Monitoring**: Deploy enhanced detection rules
-
-## Threat Intelligence Sources
-- {model} proprietary feeds
-- OpenCTI community feeds
-- MISP threat sharing platforms
-- Dark web monitoring (DarkDump)
 
 ---
-*Report generated by {model} | Classification: TLP:AMBER*
+*Report by {model} | TLP:AMBER*
 """,
-        "metadata": {
-            "model": model,
-            "category": "threat-intel",
-        }
+        "metadata": {"model": model, "category": "threat-intel"},
     }
 
 
 def generate_agents_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate AI agents workflow output."""
     return {
         "type": "agents",
         "tab": "code",
@@ -320,136 +281,82 @@ def generate_agents_output(prompt: str, model: str) -> Dict[str, Any]:
 
 ## Orchestration Plan ({model})
 
-### Agent Team Composition
-1. **Planner Agent** - Task decomposition & strategy
-2. **Executor Agent** - Code/Action implementation  
-3. **Reviewer Agent** - Quality assurance & testing
-4. **Documenter Agent** - Documentation & reporting
+### Agent Team
+1. **Planner** - Task decomposition & strategy
+2. **Executor** - Implementation
+3. **Reviewer** - Quality assurance
+4. **Documenter** - Documentation
 
-### Workflow Steps
+### Workflow
 ```python
 # {model} Agent Orchestration
 from langgraph import StateGraph
-from autogen import Agent
-
-# Define agents
-planner = Agent(name="Planner", role="Task decomposition")
-executor = Agent(name="Executor", role="Implementation")
-reviewer = Agent(name="Reviewer", role="Quality assurance")
-
-# Create workflow
 workflow = StateGraph()
 workflow.add_node("plan", planner.plan)
 workflow.add_node("execute", executor.execute)
 workflow.add_node("review", reviewer.review)
 workflow.add_edge("plan", "execute")
 workflow.add_edge("execute", "review")
-workflow.add_edge("review", "plan")  # Feedback loop
-
-# Execute for: {prompt}
-result = workflow.run(initial_state={{
-    "task": "{prompt}",
-    "model": "{model}",
-    "max_iterations": 5
-}})
+workflow.add_edge("review", "plan")
+result = workflow.run({{"task": "{prompt}"}})
 ```
 
-### Expected Deliverables
-- ✅ Task breakdown document
+### Deliverables
+- ✅ Task breakdown
 - ✅ Working implementation
-- ✅ Test results & validation
-- ✅ Documentation & handoff notes
-
-### Monitoring & Control
-- Real-time progress tracking
-- Human-in-the-loop checkpoints
-- Rollback on failure
-- Cost & token tracking
+- ✅ Test results
+- ✅ Documentation
 
 ---
-*Orchestrated by {model} | Agents: 4 | Est. Duration: 2-5 min*
+*Orchestrated by {model}*
 """,
-        "metadata": {
-            "model": model,
-            "category": "agents",
-        }
+        "metadata": {"model": model, "category": "agents"},
     }
 
 
 def generate_education_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate educational content."""
     return {
         "type": "education",
         "tab": "research",
         "content": f"""# Educational Content: {prompt}
 
 ## Learning Objectives
-By completing this module, you will:
-1. Understand the core concepts of **{prompt}**
-2. Apply practical techniques to real-world problems
-3. Build a working implementation from scratch
-
-## Concept Explanation
-### Theory
-{model} explains: **{prompt}** involves...
-
-### Key Principles
-| Principle | Description | Importance |
-|-----------|-------------|------------|
-| Principle 1 | Fundamental concept | Critical |
-| Principle 2 | Supporting mechanism | Important |
-| Principle 3 | Advanced application | Advanced |
+1. Understand core concepts of **{prompt}**
+2. Apply practical techniques
+3. Build working implementation
 
 ## Step-by-Step Tutorial
 
 ### Step 1: Setup
 ```bash
-# Install dependencies
 pip install necessary-packages
 ```
 
 ### Step 2: Implementation
 ```python
-# {model} guided implementation
-def solve_{prompt.lower().replace(' ', '_')}():
-    # Step-by-step solution
+def solve():
+    # {model} guided implementation
     pass
 ```
 
 ### Step 3: Verification
 ```python
-# Test your implementation
-assert solve_{prompt.lower().replace(' ', '_')}() == expected_result
+assert solve() == expected_result
 ```
 
 ## Practice Exercises
-1. **Beginner**: Basic implementation
-2. **Intermediate**: Add error handling
-3. **Advanced**: Optimize for performance
-
-## Assessment
-- ✅ Concept quiz: 10 questions
-- ✅ Coding challenge: 3 problems
-- ✅ Project: Build a complete solution
-
-## Resources
-- Official documentation
-- {model} curated tutorials
-- Community examples
-- Practice platforms
+1. Beginner: Basic implementation
+2. Intermediate: Add error handling
+3. Advanced: Optimize performance
 
 ---
-*Generated by {model} | Level: Intermediate | Est. Time: 2-4 hours*
+*Generated by {model} | Level: Intermediate*
 """,
-        "metadata": {
-            "model": model,
-            "category": "education",
-        }
+        "metadata": {"model": model, "category": "education"},
     }
 
 
 def generate_resume_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate resume/freelance content."""
     return {
         "type": "resume",
         "tab": "code",
@@ -458,79 +365,35 @@ def generate_resume_output(prompt: str, model: str) -> Dict[str, Any]:
 ## ATS-Optimized Resume (95%+ Match)
 
 ### Professional Summary
-{model} crafted: Results-driven professional with expertise in **{prompt}**. 
-Proven track record of delivering high-impact solutions...
+{model} crafted: Results-driven professional with expertise in **{prompt}**.
 
 ### Core Competencies
 - **{prompt}**: Expert level
-- **Related Skill 1**: Advanced
-- **Related Skill 2**: Advanced  
-- **Related Skill 3**: Intermediate
+- **Related Skills**: Advanced
 
-### Professional Experience
-**Current Role** | Company | 2022-Present
-- Led {prompt}-related initiatives resulting in 40% improvement
-- Architected scalable solutions serving 1M+ users
-- Mentored team of 5 engineers
-
-**Previous Role** | Company | 2020-2022
-- Developed core {prompt} infrastructure
-- Reduced system latency by 60%
-- Published 3 technical papers
-
-### Education & Certifications
-- **Degree**: Computer Science / Related Field
-- **Certifications**: AWS/Azure/GCP, {prompt} Specializations
-- **Continuous Learning**: Active contributor to open source
-
-## Freelance Proposal Template
-
-### Project Understanding
-Based on your requirements for **{prompt}**, I propose...
-
-### Approach & Methodology
-1. **Discovery** (Week 1): Requirements gathering & analysis
-2. **Design** (Week 2): Architecture & technical specification
-3. **Development** (Weeks 3-6): Iterative implementation
-4. **Testing** (Week 7): QA, performance, security
-5. **Deployment** (Week 8): Production release & monitoring
-
-### Deliverables
-- ✅ Source code (Git repository)
-- ✅ Documentation (API, Architecture, User guides)
-- ✅ Tests (Unit, Integration, E2E)
-- ✅ CI/CD Pipeline
-- ✅ Monitoring & Alerting
-- ✅ 30-day support included
+### Freelance Proposal
+### Approach
+1. **Discovery** (Week 1): Requirements analysis
+2. **Design** (Week 2): Architecture spec
+3. **Development** (Weeks 3-6): Implementation
+4. **Testing** (Week 7): QA & security
+4. **Deployment** (Week 8): Production release
 
 ### Timeline & Investment
 | Phase | Duration | Cost |
 |-------|----------|------|
 | Discovery | 1 week | $X,XXX |
-| Design | 1 week | $X,XXX |
 | Development | 4 weeks | $XX,XXX |
-| Testing | 1 week | $X,XXX |
-| Deployment | 1 week | $X,XXX |
-| **Total** | **8 weeks** | **$XX,XXX** |
-
-### Why Choose Me?
-- ✅ 5+ years in {prompt}
-- ✅ 20+ successful projects
-- ✅ 5.0/5.0 client rating
-- ✅ Clear communication, on-time delivery
+| **Total** | **6 weeks** | **$XX,XXX** |
 
 ---
-*Proposal generated by {model} | Customize for each client*
+*Proposal by {model}*
 """,
-        "metadata": {
-            "model": model,
-            "category": "resume",
-        }
+        "metadata": {"model": model, "category": "resume"},
     }
 
 
 def generate_trading_output(prompt: str, model: str) -> Dict[str, Any]:
-    """Generate trading/crypto analysis."""
     return {
         "type": "trading",
         "tab": "crypto",
@@ -538,197 +401,139 @@ def generate_trading_output(prompt: str, model: str) -> Dict[str, Any]:
             "analysis": f"""# Trading Analysis: {prompt}
 
 ## Market Overview ({model})
-**Current Trend**: Bullish 📈
-**Volatility**: Moderate
-**Volume**: Above Average
+**Trend**: Bullish 📈 | **Volatility**: Moderate
 
 ## Technical Analysis
 | Indicator | Value | Signal |
 |-----------|-------|--------|
-| RSI (14) | 62.3 | Neutral → Bullish |
+| RSI (14) | 62.3 | Bullish |
 | MACD | +0.0045 | Buy |
 | MA20/MA50 | Golden Cross | Strong Buy |
-| Bollinger Bands | Upper Band | Caution |
-| Volume Profile | High | Confirmation |
 
 ## Price Targets
 | Horizon | Target | Probability |
 |---------|--------|-------------|
 | 1 Day | $XX,XXX | 65% |
 | 1 Week | $XX,XXX | 55% |
-| 1 Month | $XX,XXX | 45% |
 
 ## Risk Management
-- **Stop Loss**: $XX,XXX (2% risk)
-- **Position Size**: 2-5% of portfolio
-- **Risk/Reward**: 1:3 minimum
-
-## Strategy Recommendation
-**{model} suggests**: Long position with trailing stop
-- Entry: Current market
-- Target: Resistance level
-- Stop: Recent swing low
-
-## Key Levels
-- **Support**: $XX,XXX (Strong)
-- **Resistance**: $XX,XXX (Tested 3x)
-- **Breakout**: $XX,XXX (Next target)
+- **Stop Loss**: 2% risk
+- **Position**: 2-5% portfolio
+- **R/R**: 1:3 minimum
 
 ---
-*Analysis by {model} | Not financial advice | DYOR*
+*Analysis by {model} | Not financial advice*
 """,
             "chart_data": {
                 "labels": ["1h", "4h", "1d", "1w", "1M"],
                 "prices": [100, 102, 105, 108, 112],
-                "volumes": [1000, 1200, 1500, 1800, 2000],
             },
         },
-        "metadata": {
-            "model": model,
-            "category": "trading",
-        }
+        "metadata": {"model": model, "category": "trading"},
     }
 
 
 # ==================== WEB UI COMPONENTS ====================
 
 def render_sidebar():
-    """Render the left sidebar with model router and settings."""
+    """Render the left sidebar - clean status only."""
     
     with gr.Row(variant="panel", elem_classes="sidebar") as sidebar:
         # Model Status Panel
         with gr.Column(variant="panel"):
-            gr.Markdown("# 🤖 Model Router Status")
+            gr.Markdown("# 🤖 Apeiron AI Hub")
             model_status = gr.JSON(
                 value=hub.get_model_status(),
                 label="System Status",
                 elem_id="model-status",
             )
         
-        # Engine Selector
+        # Auto-detected category display
         with gr.Column(variant="panel"):
-            gr.Markdown("# 🎯 Engine Selector")
-            category_dropdown = gr.Dropdown(
-                choices=list(CATEGORY_ROUTERS.keys()),
-                value="coding",
-                label="Select Category",
-                interactive=True,
+            gr.Markdown("# 🎯 Auto-Detected Category")
+            category_display = gr.Textbox(
+                label="Current Category",
+                value="Auto-detecting...",
+                interactive=False,
             )
-            
-            model_dropdown = gr.Dropdown(
-                choices=list(MODELS.keys()),
-                value=list(CATEGORY_ROUTERS.values())[0],
-                label="Select Model",
-                interactive=True,
+            model_display = gr.Textbox(
+                label="Active Model",
+                value=hub.active_model.name,
+                interactive=False,
             )
         
-        # Settings Panel
+        # System info
         with gr.Column(variant="panel"):
-            gr.Markdown("# ⚙️ Settings")
-            cloud_toggle = gr.Checkbox(
-                value=True,
-                label="Cloud Mode Only",
-                info="All models run on cloud GPU - no local downloads",
-            )
+            gr.Markdown("# ⚙️ System")
+            gr.Markdown("🤖 **47 Models** | 10 Categories")
+            gr.Markdown("☁️ Cloud GPU | Zero Local Downloads")
+            gr.Markdown("🔄 Auto-Routing | Zero Config")
     
-    return sidebar, category_dropdown, model_dropdown, cloud_toggle
+    return sidebar, category_display, model_display
 
 
 def render_chat_canvas():
-    """Render the central chat/canvas area."""
+    """Render the central chat area - clean and simple."""
     
     with gr.Row(elem_classes="main-canvas") as canvas:
-        # Chat area
-        with gr.Column(scale=3, min_width=600) as chat_col:
-            gr.Markdown("# 💬 Multi-Turn Chat")
+        # Chat area - full width
+        with gr.Column(scale=4, min_width=700) as chat_col:
+            gr.Markdown("# 💬 Apeiron AI Chat")
             
-            # Chat display using Chatbot component
+            # Chat display
             chat_display = gr.Chatbot(
                 label="Conversation",
-                height=400,
+                height=500,
                 show_label=True,
                 type="messages",
-                value=[{"role": "assistant", "content": "👋 Welcome to **Apeiron Unified AI Hub**!\n\nI'm your central router for **47 open-source AI models** across 10 categories:\n\n💻 **Coding** - Qwen 2.5-Coder, DeepSeek-Coder, GLM, Llama 3.3\n🎬 **Video** - Wan 2.1/2.2, HunyuanVideo, LTX-Video\n🔊 **Audio** - Whisper, Kokoro-82M, F5-TTS, XTTS-v2\n🎨 **Design** - FLUX.1, Stable Diffusion 3.5, Qwen-Image\n🔬 **Research** - DeepSeek-R1, QwQ-32B, STORM, Crawl4AI\n🛡️ **Threat Intel** - Robin, AIL Framework, OpenCTI, TorBot\n🤖 **Agents** - LangGraph, AutoGen, CrewAI, Browser-Use\n📚 **Education** - Qwen 2.5-Math, DeepSeek-R1, Llama 3.3\n📄 **Resume** - Reactive-Resume, Qwen 2.5, Llama 3.3\n📈 **Trading** - FreqAI, Chronos, TimesFM, FinGPT, CCXT\n\n**Select a category, enter your prompt, and click Send!**"}],
+                value=[{"role": "assistant", "content": "👋 Welcome to **Apeiron Unified AI Hub**!\n\nI'm your **fully automatic** AI hub with **47 models** across **10 categories**.\n\n**Just chat naturally** - I'll automatically:\n🔍 Detect what you need\n🎯 Select the best model\n⚡ Execute & deliver results\n\n**Try saying:**\n• \"Create a Python web scraper\"\n• \"Analyze Bitcoin technical setup\"\n• \"Generate a cybersecurity threat report\"\n• \"Create a logo for my startup\"\n• \"Explain transformer attention\"\n\n**Just type and send - I handle the rest!**"}],
             )
             
             # Prompt input
             with gr.Row():
                 prompt_input = gr.Textbox(
-                    label="Enter Prompt",
-                    placeholder="Describe what you want... (e.g., 'Create a Python web scraper', 'Generate a cybersecurity report', 'Analyze Bitcoin price')",
-                    scale=4,
+                    label="Your Message",
+                    placeholder="Type anything... (e.g., 'Create a Python async web scraper', 'Analyze BTC price', 'Write a threat report')",
+                    scale=5,
                     lines=2,
+                    container=False,
                 )
-                send_btn = gr.Button("Send 🚀", scale=1, variant="primary")
+                send_btn = gr.Button("Send 🚀", scale=1, variant="primary", size="lg")
         
-        # Quick actions panel
-        with gr.Column(scale=1, min_width=300) as actions_col:
-            gr.Markdown("# ⚡ Quick Actions")
+        # Right panel - outputs
+        with gr.Column(scale=2, min_width=400) as output_col:
+            gr.Markdown("# 📊 Output Panels")
             
-            quick_actions = gr.Dropdown(
-                choices=[v["name"] for v in CATEGORY_GENERATORS.values()],
-                value="💻 Code Generation",
-                label="Quick Task",
-            )
-            
-            execute_quick = gr.Button("Execute Quick Task", size="sm")
+            with gr.Tabs(elem_classes="output-tabs") as tabs:
+                with gr.TabItem("💻 Code Editor", id="code-tab"):
+                    code_output = gr.Code(
+                        label="Generated Code", language="python", lines=20,
+                        interactive=False, show_line_numbers=True,
+                    )
+                with gr.TabItem("🖼️ Images", id="image-tab"):
+                    image_gallery = gr.Gallery(
+                        label="Generated Images", columns=2, object_fit="contain", height=300,
+                    )
+                with gr.TabItem("▶️ Video", id="video-tab"):
+                    video_player = gr.Video(label="Generated Video", height=250)
+                with gr.TabItem("🔊 Audio", id="audio-tab"):
+                    audio_player = gr.Audio(label="Generated Audio", type="filepath")
+                with gr.TabItem("📊 Reports", id="research-tab"):
+                    report_output = gr.Markdown(label="Research/Reports")
+                with gr.TabItem("📈 Charts", id="crypto-tab"):
+                    crypto_chart = gr.Plot(label="Market Data")
     
-    return canvas, chat_display, prompt_input, send_btn, quick_actions, execute_quick
-
-
-def render_right_panel():
-    """Render the right/lower panels for outputs."""
-    
-    with gr.Tabs(elem_classes="output-tabs") as tabs:
-        
-        # Code Editor Tab
-        with gr.TabItem("💻 Code Editor", id="code-tab"):
-            code_output = gr.Code(
-                label="Generated Code",
-                language="python",
-                lines=25,
-                interactive=False,
-                show_line_numbers=True,
-            )
-        
-        # Image Gallery Tab
-        with gr.TabItem("🖼️ Image Gallery", id="image-tab"):
-            image_gallery = gr.Gallery(
-                label="Generated Images",
-                columns=2,
-                object_fit="contain",
-                height=500,
-            )
-        
-        # Video Player Tab
-        with gr.TabItem("▶️ Video Player", id="video-tab"):
-            video_player = gr.Video(label="Generated Video", height=400)
-        
-        # Audio Player Tab
-        with gr.TabItem("🔊 Audio Player", id="audio-tab"):
-            audio_player = gr.Audio(label="Generated Audio", type="filepath")
-        
-        # Research Report Tab
-        with gr.TabItem("📊 Research Report", id="research-tab"):
-            report_output = gr.Markdown(
-                label="Research Findings",
-            )
-        
-        # Crypto Chart Tab
-        with gr.TabItem("📈 Crypto Chart", id="crypto-tab"):
-            crypto_chart = gr.Plot(label="Live Market Data")
-    
-    return tabs, code_output, image_gallery, video_player, audio_player, report_output, crypto_chart
+    return canvas, chat_display, prompt_input, send_btn
 
 
 # ==================== HANDLERS ====================
 
-async def route_prompt_async(category: str, prompt: str, model_name: str, cloud_mode: bool) -> Dict[str, Any]:
-    """Async wrapper for routing prompt through hub."""
+async def route_prompt_async(prompt: str, cloud_mode: bool = True) -> Dict[str, Any]:
+    """Auto-detect category and route prompt through hub."""
     
-    if model_name not in MODELS:
-        model_name = CATEGORY_ROUTERS.get(category, "qwen2.5-coder")
-    
+    # Auto-detect category from prompt
+    category = auto_detect_category(prompt)
+    model_name = CATEGORY_ROUTERS.get(category, "qwen2.5-coder")
     model = MODELS[model_name]
     
     # Route through hub
@@ -738,51 +543,48 @@ async def route_prompt_async(category: str, prompt: str, model_name: str, cloud_
         preferences={"cloud_mode": cloud_mode},
     )
     
-    # Enhance with category-specific detailed output
+    # Enhance with detailed category-specific output
     detailed = generate_category_output(category, prompt, model_name)
     result.update(detailed)
+    result["auto_category"] = category
+    result["auto_model"] = model_name
     
     return result
 
 
-def on_send(
-    prompt: str,
-    category: str,
-    model_name: str,
-    cloud_mode: bool,
-    chat_history: List,
-) -> tuple:
-    """Handle sending a prompt - synchronous wrapper for Gradio."""
+def on_send(prompt: str, cloud_mode: bool, chat_history: List) -> tuple:
+    """Handle sending a prompt - fully automatic."""
     if not prompt.strip():
-        return chat_history, "", category, model_name
+        return chat_history, ""
     
     try:
         # Run async routing
-        result = asyncio.run(
-            route_prompt_async(prompt, category, model_name, cloud_mode)
-        )
+        result = asyncio.run(route_prompt_async(prompt, cloud_mode))
+        
+        auto_category = result.get("auto_category", "coding")
+        auto_model = result.get("auto_model", "qwen2.5-coder")
+        gen_info = CATEGORY_GENERATORS.get(auto_category, {"icon": "🤖", "name": "AI"})
         
         # Format result for chat display
         if result.get("type") == "code":
-            response = f"**{CATEGORY_GENERATORS[category]['icon']} {CATEGORY_GENERATORS[category]['name']}**\n\n```{result.get('language', 'python')}\n{result.get('content', '')}\n```"
-        elif result.get("type") == "research" or result.get("type") == "threat-intel" or result.get("type") == "education":
-            response = f"**{CATEGORY_GENERATORS[category]['icon']} {CATEGORY_GENERATORS[category]['name']}**\n\n{result.get('content', '')}"
+            response = f"**{gen_info['icon']} {gen_info['name']}** (via {result['auto_model']})\n\n```{result.get('language', 'python')}\n{result.get('content', '')}\n```"
+        elif result.get("type") in ("research", "threat-intel", "education"):
+            response = f"**{gen_info['icon']} {gen_info['name']}** (via {result['auto_model']})\n\n{result.get('content', '')}"
         elif result.get("type") == "trading":
-            response = f"**{CATEGORY_GENERATORS[category]['icon']} {CATEGORY_GENERATORS[category]['name']}**\n\n{result.get('content', {}).get('analysis', '')}"
-        elif result.get("type") == "agents":
-            response = f"**{CATEGORY_GENERATORS[category]['icon']} {CATEGORY_GENERATORS[category]['name']}**\n\n{result.get('content', '')}"
-        elif result.get("type") == "resume":
-            response = f"**{CATEGORY_GENERATORS[category]['icon']} {CATEGORY_GENERATORS[category]['name']}**\n\n{result.get('content', '')}"
+            response = f"**{gen_info['icon']} {gen_info['name']}** (via {result['auto_model']})\n\n{result.get('content', {}).get('analysis', '')}"
+        elif result.get("type") in ("agents", "resume"):
+            response = f"**{gen_info['icon']} {gen_info['name']}** (via {result['auto_model']})\n\n{result.get('content', '')}"
         else:
-            response = f"**{CATEGORY_GENERATORS[category]['icon']} {CATEGORY_GENERATORS[category]['name']}**\n\n{result.get('content', 'Processing...')}"
+            response = f"**{gen_info['icon']} {gen_info['name']}** (via {result['auto_model']})\n\n{result.get('content', 'Processing...')}"
         
-        # Update chat history (Gradio messages format)
+        # Update chat history
         new_history = chat_history + [
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": response},
         ]
         
-        return new_history, "", category, model_name
+        # Return updated history + auto-detected info for sidebar
+        return new_history, "", auto_category, auto_model
         
     except Exception as e:
         error_msg = f"❌ Error: {str(e)}"
@@ -790,64 +592,21 @@ def on_send(
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": error_msg},
         ]
-        return new_history, "", category, model_name
+        return new_history, "", "coding", "qwen2.5-coder"
 
 
-def on_category_change(category: str):
-    """Handle category selection change - return suggested model."""
-    if category in CATEGORY_ROUTERS:
-        suggested = CATEGORY_ROUTERS[category]
-        if suggested in MODELS:
-            return suggested
-    return list(CATEGORY_ROUTERS.values())[0]
-
-
-def on_quick_execute(quick_action: str, category_dropdown: str, model_dropdown: str, cloud_toggle: bool):
-    """Execute quick action."""
-    # Map quick action back to category
-    action_to_category = {v["name"]: k for k, v in CATEGORY_GENERATORS.items()}
-    category = action_to_category.get(quick_action, category_dropdown)
-    model = CATEGORY_ROUTERS.get(category, model_dropdown)
-    
-    prompt = f"Quick task: {quick_action}"
-    
-    try:
-        result = asyncio.run(route_prompt_async(prompt, category, model, cloud_toggle))
-        
-        # Return outputs for all tabs based on result type
-        code_out = ""
-        image_out = None
-        video_out = None
-        audio_out = None
-        report_out = ""
-        chart_out = None
-        
-        if result.get("type") == "code":
-            code_out = result.get("content", "")
-        elif result.get("type") == "image":
-            image_out = []  # Would need actual image generation
-        elif result.get("type") == "video":
-            video_out = None
-        elif result.get("type") == "audio":
-            audio_out = None
-        elif result.get("type") in ["research", "threat-intel", "education"]:
-            report_out = result.get("content", "")
-        elif result.get("type") == "trading":
-            chart_out = None  # Would need matplotlib figure
-        
-        return code_out, image_out, video_out, audio_out, report_out, chart_out
-        
-    except Exception as e:
-        return f"Error: {e}", None, None, None, "", None
+def on_category_change(category_display: str, model_display: str):
+    """Update sidebar displays."""
+    return category_display, model_display
 
 
 # ==================== LAUNCH FUNCTION ====================
 
 def launch_dashboard() -> gr.Blocks:
-    """Launch the complete Apeiron Web Dashboard."""
+    """Launch the fully automatic Apeiron Web Dashboard."""
     
     with gr.Blocks(
-        title="Apeiron Unified AI Hub",
+        title="Apeiron AI Hub - Fully Automatic",
         theme=gr.themes.Soft(),
         css="""
         .sidebar {background: #f8f9fa; border-right: 1px solid #e3e6e9;}
@@ -859,18 +618,16 @@ def launch_dashboard() -> gr.Blocks:
         
         # Header
         gr.Markdown("# 🏔️ Apeiron Unified AI Hub")
-        gr.Markdown("*Central router for 47 open-source AI models • Running on Hugging Face Spaces*")
+        gr.Markdown("*Fully Automatic • 47 Models • 10 Categories • Just Chat*")
         
-        # Sidebar components
-        sidebar, category_dropdown, model_dropdown, cloud_toggle = render_sidebar()
+        # Sidebar
+        sidebar, category_display, model_display = render_sidebar()
         
         # Main chat canvas
         canvas_results = render_chat_canvas()
         chat_display = canvas_results[1]
         prompt_input = canvas_results[2]
         send_btn = canvas_results[3]
-        quick_actions = canvas_results[4]
-        execute_quick = canvas_results[5]
         
         # Right panel
         panel_results = render_right_panel()
@@ -884,44 +641,41 @@ def launch_dashboard() -> gr.Blocks:
         
         # ==================== EVENT HANDLERS ====================
         
-        # Category change -> update model dropdown
-        category_dropdown.change(
-            fn=on_category_change,
-            inputs=[category_dropdown],
-            outputs=[model_dropdown],
-        )
-        
-        # Quick action execute
-        execute_quick.click(
-            fn=on_quick_execute,
-            inputs=[quick_actions, category_dropdown, model_dropdown, cloud_toggle],
-            outputs=[code_output, image_gallery, video_player, audio_player, report_output, crypto_chart],
-        )
-        
         # Send button
         send_btn.click(
             fn=on_send,
-            inputs=[prompt_input, category_dropdown, model_dropdown, cloud_toggle, chat_display],
-            outputs=[chat_display, prompt_input, category_dropdown, model_dropdown],
+            inputs=[prompt_input, cloud_toggle, chat_display],
+            outputs=[chat_display, prompt_input, category_display, model_display],
         )
         
-        # Enter key in prompt
+        # Enter key
         prompt_input.submit(
             fn=on_send,
-            inputs=[prompt_input, category_dropdown, model_dropdown, cloud_toggle, chat_display],
-            outputs=[chat_display, prompt_input, category_dropdown, model_dropdown],
+            inputs=[prompt_input, cloud_toggle, chat_display],
+            outputs=[chat_display, prompt_input, category_display, model_display],
         )
         
-# Initialize chat with welcome message (already set in Chatbot constructor)
-        
+        # Initialize chat
+        chat_display.value = [
+            {"role": "assistant", "content": "👋 Welcome to **Apeiron Unified AI Hub**!\n\n**Fully Automatic** - No dropdowns, no config needed.\n\n**47 Models • 10 Categories • Just Chat**\n\nI automatically detect what you need and route to the best model:\n\n💻 **Coding** - Python, JS, APIs, algorithms...\n🎬 **Video** - Cinematic generation, editing...\n🔊 **Audio** - TTS, STT, voice cloning...\n🎨 **Design** - Logos, images, illustrations...\n🔬 **Research** - Deep analysis, reports...\n🛡️ **Threat Intel** - CVEs, malware, incidents...\n🤖 **Agents** - Multi-agent workflows...\n📚 **Education** - Tutorials, explanations...\n📄 **Resume** - ATS-optimized CVs, proposals...\n📈 **Trading** - Crypto/stock analysis...\n\n**Just type what you need - I handle the rest!**"}
+        ]
+    
     return app
+
+
+# ==================== CLOUD TOGGLE ====================
+
+# Cloud mode toggle (hidden in sidebar but available)
+cloud_toggle = gr.Checkbox(
+    value=True,
+    label="Cloud Mode Only",
+    info="All models run on cloud GPU",
+    visible=False,  # Hidden - always cloud
+)
 
 
 # ==================== LAUNCH ====================
 
 if __name__ == "__main__":
-    # Launch the dashboard
     app = launch_dashboard()
-    
-    # Start server - clean launch
     app.launch(share=True)
