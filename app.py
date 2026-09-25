@@ -402,9 +402,8 @@ def create_interface():
                 chatbot = gr.Chatbot(
                     label="Agent Team",
                     height=550,
-                    type="messages",
                     avatar_images=("👤", "🤖"),
-                    value=[{"role": "assistant", "content": "👋 স্বাগতম! Welcome to **Apeiron Multi-Agent Hub**!\n\n**৩-এজেন্ট টিম:** Planner 📋 • Researcher 🔬 • Executor ⚡\n**৪৭ মডেল** পটভূমিতে, অটো-সিলেক্ট\n\n**কিভাবে কাজ করে:**\n1️⃣ আপনি লিখেন ( বাংলা / English )\n2️⃣ **Planner** পরিকল্পনা তৈরি করে, আপন থেকে অনুমতি নেয়\n3️⃣ **Researcher** গভীর রিসার্চ করে (যদি লাগে)\n4️⃣ **Executor** সম্পূর্ণ আউটপুট দেয় (কোড/ফাইল/রিপোর্ট)\n\n**ফাইল আপলোড করুন:** ছবি, ভিডিও, পিডিএফ, ডক্স, কোড\n\n**চলে যান!** বাংলা বা ইংরেজি - যেকোনো ভাষায় লিখুন 🚀"}],
+                    value=[["", "👋 স্বাগতম! Welcome to **Apeiron Multi-Agent Hub**!\n\n**৩-এজেন্ট টিম:** Planner 📋 • Researcher 🔬 • Executor ⚡\n**৪৭ মডেল** পটভূমিতে, অটো-সিলেক্ট\n\n**কিভাবে কাজ করে:**\n1️⃣ আপনি লিখেন ( বাংলা / English )\n2️⃣ **Planner** পরিকল্পনা তৈরি করে, আপন থেকে অনুমতি নেয়\n3️⃣ **Researcher** গভীর রিসার্চ করে (যদি লাগে)\n4️⃣ **Executor** সম্পূর্ণ আউটপুট দেয় (কোড/ফাইল/রিপোর্ট)\n\n**ফাইল আপলোড করুন:** ছবি, ভিডিও, পিডিএফ, ডক্স, কোড\n\n**চলে যান!** বাংলা বা ইংরেজি - যেকোনো ভাষায় লিখুন 🚀"]],
                 )
                 
                 with gr.Row():
