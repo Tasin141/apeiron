@@ -603,7 +603,7 @@ needs_research: true"""
         
         msg_input.submit(
             fn=chat_handler,
-            inputs=[msg_input, chatbot, file_upload, planning_phase_state, conv_hist, plan, lang],
+            inputs=[msg_input, chatbot, file_upload, planning_phase_state, conversation_history_state, current_plan_state, lang_state],
             outputs=[chatbot, msg_input, planning_phase_state, current_plan_state, lang_state, status_bar, plan_display, code_out, img_out, vid_out, aud_out, rpt_out, cht_out],
         )
         
