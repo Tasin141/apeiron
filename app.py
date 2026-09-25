@@ -648,6 +648,7 @@ def render_chat_canvas():
                 height=400,
                 show_label=True,
                 type="messages",
+                value=[{"role": "assistant", "content": "👋 Welcome to **Apeiron Unified AI Hub**!\n\nI'm your central router for **47 open-source AI models** across 10 categories:\n\n💻 **Coding** - Qwen 2.5-Coder, DeepSeek-Coder, GLM, Llama 3.3\n🎬 **Video** - Wan 2.1/2.2, HunyuanVideo, LTX-Video\n🔊 **Audio** - Whisper, Kokoro-82M, F5-TTS, XTTS-v2\n🎨 **Design** - FLUX.1, Stable Diffusion 3.5, Qwen-Image\n🔬 **Research** - DeepSeek-R1, QwQ-32B, STORM, Crawl4AI\n🛡️ **Threat Intel** - Robin, AIL Framework, OpenCTI, TorBot\n🤖 **Agents** - LangGraph, AutoGen, CrewAI, Browser-Use\n📚 **Education** - Qwen 2.5-Math, DeepSeek-R1, Llama 3.3\n📄 **Resume** - Reactive-Resume, Qwen 2.5, Llama 3.3\n📈 **Trading** - FreqAI, Chronos, TimesFM, FinGPT, CCXT\n\n**Select a category, enter your prompt, and click Send!**"}],
             )
             
             # Prompt input
@@ -911,11 +912,8 @@ def launch_dashboard() -> gr.Blocks:
             outputs=[chat_display, prompt_input, category_dropdown, model_dropdown],
         )
         
-        # Initialize chat with welcome message
-        chat_display.value = [
-            {"role": "assistant", "content": "👋 Welcome to **Apeiron Unified AI Hub**!\n\nI'm your central router for **47 open-source AI models** across 10 categories:\n\n💻 **Coding** - Qwen 2.5-Coder, DeepSeek-Coder, GLM, Llama 3.3\n🎬 **Video** - Wan 2.1/2.2, HunyuanVideo, LTX-Video\n🔊 **Audio** - Whisper, Kokoro-82M, F5-TTS, XTTS-v2\n🎨 **Design** - FLUX.1, Stable Diffusion 3.5, Qwen-Image\n🔬 **Research** - DeepSeek-R1, QwQ-32B, STORM, Crawl4AI\n🛡️ **Threat Intel** - Robin, AIL Framework, OpenCTI, TorBot\n🤖 **Agents** - LangGraph, AutoGen, CrewAI, Browser-Use\n📚 **Education** - Qwen 2.5-Math, DeepSeek-R1, Llama 3.3\n📄 **Resume** - Reactive-Resume, Qwen 2.5, Llama 3.3\n📈 **Trading** - FreqAI, Chronos, TimesFM, FinGPT, CCXT\n\n**Select a category, enter your prompt, and click Send!**"}
-        ]
-    
+# Initialize chat with welcome message (already set in Chatbot constructor)
+        
     return app
 
 
@@ -925,10 +923,5 @@ if __name__ == "__main__":
     # Launch the dashboard
     app = launch_dashboard()
     
-    # Start server - Hugging Face Spaces compatible
-    app.launch(
-        host="0.0.0.0",
-        port=7860,
-        share=False,
-        server_name="0.0.0.0",
-    )
+    # Start server - clean launch
+    app.launch(share=True)
