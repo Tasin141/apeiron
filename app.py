@@ -470,12 +470,11 @@ def create_interface():
                 processed.append(result)
             
             return f"✅ {len(processed)} file(s) uploaded", processed
-        
-        async def chat_handler(message, history, files, planning_phase_flag, conv_hist, plan, lang):
+async def chat_handler(message, history, files, planning_phase_flag, conv_hist, current_plan, lang):
             """Main chat handler with agent orchestration."""
             
             if not message.strip() and not files:
-                return history, "", planning_phase_flag, plan, lang, "Waiting..."
+                return history, "", planning_phase_flag, current_plan, lang, "Waiting...", {}, "", None, None, None, "", None
             
             # Process files
             if files:
@@ -501,34 +500,35 @@ def create_interface():
                     
                     # Format response
                     response = f"""📋 **Planner Agent** 📋
-
-{planner_resp.content}
-
----
-**Proposed Plan:**
-1. Analyze requirements & files
-2. Research best approaches (if needed)
-3. Execute with best models from 47
-3. Deliver complete output in tabs
-
-**Reply 'হ্যাঁ/yes/ok' to approve, or suggest changes.**"""
-                    
+            
+            {planner_resp.content}
+            
+            ---
+            **Proposed Plan:**
+            1. Analyze requirements & files
+            2. Research best approaches (if needed)
+            3. Execute with best models from 47
+            3. Deliver complete output in tabs
+            
+            **Reply 'হ্যাঁ/yes/ok' to approve, or suggest changes.**"""
+            
                     new_history = history + [
                         {"role": "user", "content": message},
                         {"role": "assistant", "content": response}
                     ]
                     
                     plan_display = f"""goal: "{message}"
-steps:
-  - "Analyze requirements & uploaded files"
-  - "Research best approaches (if needed)"
-  - "Execute with optimal models from 47"
-  - "Deliver complete output in tabs"
-status: "awaiting_approval"
-needs_research: true"""
-                    
+            steps:
+              - "Analyze requirements & uploaded files"
+              - "Research best approaches (if needed)"
+              - "Execute with optimal models from 47"
+              - "Deliver complete output in tabs"
+            status: "awaiting_approval"
+            needs_research: true"""
+            
                     return (new_history, "", True, plan, "bn" if "bn" in lang else "en", 
-                            "📋 **Planner** active — Awaiting your approval")
+                            "📋 **Planner** active — Awaiting your approval",
+                            plan_display, "", None, None, None, "", None)
                 
                 else:
                     # Execution phase
@@ -551,14 +551,15 @@ needs_research: true"""
                         detailed = generate_category_output("coding", message, "qwen2.5-coder")
                         
                         response = f"""⚡ **Executor Agent** ⚡
-
-**Task Completed!** ✅
-
-{executor_resp.content}
-
----
-**Outputs generated in tabs →**"""
-                        
+            
+            **Task Completed!** ✅
+            
+            {executor_resp.content}
+            
+            ---
+            
+            **Outputs generated in tabs →**"""
+            
                         # Prepare outputs for tabs
                         detailed = generate_category_output("coding", message, "qwen2.5-coder")
                         
@@ -576,15 +577,15 @@ needs_research: true"""
                         # User wants changes to plan
                         planner_resp = await orchestrator.planner_agent(f"User wants changes: {message}. Adjust plan.", lang)
                         response = f"""📋 **Planner Agent** (Revised)
-
-{planner_resp.content}
-
-**Reply 'হ্যাঁ/yes' to approve revised plan.**"""
+            
+            {planner_resp.content}
+            
+            **Reply 'হ্যাঁ/yes' to approve revised plan.**"""
                         new_history = history + [
                             {"role": "user", "content": message},
                             {"role": "assistant", "content": response}
                         ]
-                        return new_history, "", True, plan, lang, "📋 **Planner** revised — Awaiting approval"
+                        return new_history, "", True, plan, lang, "📋 **Planner** revised — Awaiting approval", plan_display, "", None, None, None, "", None
                         
             except Exception as e:
                 error_msg = f"❌ Error: {str(e)}"
@@ -592,7 +593,7 @@ needs_research: true"""
                     {"role": "user", "content": message},
                     {"role": "assistant", "content": error_msg}
                 ]
-                return new_history, "", planning_phase_flag, plan, lang, f"❌ Error: {e}"
+                return new_history, "", planning_phase_flag, current_plan, lang, f"❌ Error: {e}", {}, "", None, None, None, "", None
         
         # Event handlers
         send_btn.click(
