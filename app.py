@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """
-Apeiron Unified AI Hub - ChatGPT-like Multi-Agent System
-- 3 Agents: Planner, Executor, Researcher (collaborating)
-- 47 Models in background, auto-selected
-- File uploads: images, videos, PDFs, documents
-- Multilingual: English + বাংলা
-- ChatGPT-like conversational flow with planning phase
+Apeiron AI Hub - ChatGPT-like Interface
+Clean, minimal, ChatGPT-style interface with 3-agent orchestration
 """
 
 import asyncio
 import json
 import os
 import sys
-import base64
+import random
 import mimetypes
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -29,29 +25,11 @@ hub.active_model = list(MODELS.values())[0]
 
 # ==================== AGENT SYSTEM ====================
 
-class AgentMessage:
-    """Message between agents and user."""
-    def __init__(self, role: str, content: str, agent: str = "", metadata: Dict = None):
-        self.role = role  # user, assistant, planner, executor, researcher
-        self.content = content
-        self.agent = agent
-        self.metadata = metadata or {}
-
-    def to_dict(self) -> Dict:
-        return {
-            "role": self.role,
-            "content": self.content,
-            "agent": self.agent,
-            "metadata": self.metadata
-        }
-
-
 class FileProcessor:
     """Process uploaded files for agents."""
     
     @staticmethod
     def process_file(file_path: str) -> Dict[str, Any]:
-        """Extract content from uploaded file."""
         if not file_path or not os.path.exists(file_path):
             return {"error": "File not found"}
         
@@ -59,264 +37,91 @@ class FileProcessor:
         ext = Path(file_path).suffix.lower()
         
         result = {
-            "path": file_path,
-            "name": Path(file_path).name,
-            "size": os.path.getsize(file_path),
-            "mime": mime_type,
-            "ext": ext,
-            "content": None,
-            "preview": None
+            "path": file_path, "name": Path(file_path).name,
+            "size": os.path.getsize(file_path), "mime": mime_type, "ext": ext,
+            "content": None, "preview": None
         }
         
         try:
-            # Text files
             if ext in ['.txt', '.md', '.py', '.js', '.json', '.yaml', '.yml', '.csv', '.html', '.css', '.sql']:
                 with open(file_path, 'r', encoding='utf-8') as f:
-                    result["content"] = f.read()[:50000]  # Limit size
-            
-            # PDF
+                    result["content"] = f.read()[:50000]
             elif ext == '.pdf':
                 try:
-                    import fitz  # PyMuPDF
+                    import fitz
                     doc = fitz.open(file_path)
-                    text = ""
-                    for page in doc:
-                        text += page.get_text()
+                    text = "".join(page.get_text() for page in doc)
                     result["content"] = text[:50000]
                     doc.close()
-                except:
-                    result["content"] = "[PDF content extraction requires PyMuPDF]"
-            
-            # Images
+                except: result["content"] = "[PDF content extraction requires PyMuPDF]"
             elif ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']:
                 result["preview"] = file_path
-                result["content"] = f"[Image: {Path(file_path).name}, {result['size']} bytes]"
-            
-            # Videos
+                result["content"] = f"[Image: {Path(file_path).name}]"
             elif ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
                 result["preview"] = file_path
-                result["content"] = f"[Video: {Path(file_path).name}, {result['size']} bytes]"
-            
-            # Audio
+                result["content"] = f"[Video: {Path(file_path).name}]"
             elif ext in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
                 result["preview"] = file_path
-                result["content"] = f"[Audio: {Path(file_path).name}, {result['size']} bytes]"
-            
-            # Documents
+                result["content"] = f"[Audio: {Path(file_path).name}]"
             elif ext in ['.docx', '.doc']:
                 try:
                     import docx
                     doc = docx.Document(file_path)
-                    text = "\n".join([p.text for p in doc.paragraphs])
-                    result["content"] = text[:50000]
-                except:
-                    result["content"] = "[DOCX content extraction requires python-docx]"
-            
+                    result["content"] = "\n".join(p.text for p in doc.paragraphs)[:50000]
+                except: result["content"] = "[DOCX requires python-docx]"
             else:
-                result["content"] = f"[File: {Path(file_path).name}, type: {mime_type}]"
-                
+                result["content"] = f"[File: {Path(file_path).name}]"
         except Exception as e:
-            result["content"] = f"[Error processing file: {str(e)}]"
-        
+            result["content"] = f"[Error: {e}]"
         return result
 
 
 class AgentOrchestrator:
-    """Orchestrates 3 agents: Planner, Researcher, Executor."""
-    
     def __init__(self, hub: UnifiedHub):
         self.hub = hub
-        self.conversation_history: List[AgentMessage] = []
         self.uploaded_files: List[Dict] = []
         self.current_plan: Optional[Dict] = None
-        self.planning_phase = True
         
     def add_file(self, file_path: str):
-        """Add uploaded file to context."""
-        processed = FileProcessor.process_file(file_path)
-        self.uploaded_files.append(processed)
+        self.uploaded_files.append(FileProcessor.process_file(file_path))
     
     def detect_language(self, text: str) -> str:
-        """Detect if text is Bengali or English."""
         bengali_chars = sum(1 for c in text if '\u0980' <= c <= '\u09FF')
         return "bn" if bengali_chars > len(text) * 0.1 else "en"
     
-    def get_system_prompt(self, lang: str) -> str:
-        """Get system prompt for agents."""
-        if lang == "bn":
-            return """তুমি Apeiron AI Hub-এর ৩-এজেন্ট টিমের অংশ। তোমার কাজ:
-1. Planner: টাস্ক বিশ্লেষণ, পরিকল্পনা, ধাপ-ধাপ স্ট্র্যাটেজি
-2. Researcher: গভীর রিসার্চ, তথ্য সংগ্রহ, ফ্যাক্ট চেক
-3. Executor: কোড লিখা, ফাইল প্রসেসিং, আউটপুট তৈরি
-
-নিয়ম:
-- বাংলা বা ইংরেজি - ব্যবহারকারীর ভাষায় উত্তর দাও
-- ফাইল আপলোড হলে সেটা পড়ো এবং ব্যবহার করো
-- পরিকল্পনা ফেজে ব্যবহারকারীর সাথে আলোচনা করো
-- এক্সিকিউশন ফেজে সমপূর্ণ আউটপুট দাও
-- সর্বদা বাংলা+ইংরেজি মিক্সড রেসপন্স দাও"""
-        else:
-            return """You are part of Apeiron AI Hub's 3-agent team:
-1. Planner: Task analysis, planning, step-by-step strategy
-2. Researcher: Deep research, fact-checking, information gathering
-3. Executor: Code writing, file processing, output generation
-
-Rules:
-- Respond in user's language (English/Bengali)
-- Process uploaded files and use their content
-- In planning phase, discuss with user before executing
-- In execution phase, deliver complete outputs
-- Always provide helpful, detailed responses"""
-
-    async def planner_agent(self, user_message: str, lang: str) -> AgentMessage:
-        """Planner agent: analyzes task, creates plan, discusses with user."""
+    async def execute_task(self, message: str, lang: str) -> Dict[str, Any]:
+        """Execute task directly - auto-detect category, route to best model."""
+        category = auto_detect_category(message)
+        model_name = CATEGORY_ROUTERS.get(category, "qwen2.5-coder")
         
-        context = self._build_context(lang)
-        prompt = f"""As the PLANNER agent, analyze this request and create a step-by-step plan.
-
-User request: {user_message}
-
-Context:
-- Language: {lang}
-- Uploaded files: {len(self.uploaded_files)} files
-- Previous plan: {json.dumps(self.current_plan, ensure_ascii=False) if self.current_plan else 'None'}
-
-Your task:
-1. Understand what user wants
-2. Break into clear steps
-3. Identify which models/tools needed
-4. Ask clarifying questions if needed
-4. Present plan to user for approval
-
-Respond in { 'Bengali' if lang == 'bn' else 'English' } with a clear plan."""
-
-        result = await self.hub.route_prompt(prompt, "agents", {"cloud_mode": True})
-        return AgentMessage("assistant", result.get("content", ""), "planner")
-    
-    async def researcher_agent(self, query: str, lang: str) -> AgentMessage:
-        """Researcher agent: deep research, fact-finding."""
+        # Route through hub
+        result = await hub.route_prompt(
+            prompt=message, category=category, preferences={"cloud_mode": True}
+        )
         
-        prompt = f"""As the RESEARCHER agent, conduct deep research on: {query}
-
-Provide:
-- Key findings with sources
-- Current best practices
-- Technical details
-- Relevant code examples if applicable
-
-Language: { 'Bengali' if lang == 'bn' else 'English' }"""
-
-        result = await self.hub.route_prompt(query, "research", {"cloud_mode": True})
-        return AgentMessage("assistant", result.get("content", ""), "researcher")
-    
-    async def executor_agent(self, task: str, lang: str, plan: Dict) -> AgentMessage:
-        """Executor agent: implements the plan, generates outputs."""
-        
-        prompt = f"""As the EXECUTOR agent, implement this plan:
-
-Plan: {json.dumps(plan, ensure_ascii=False)}
-Task: {task}
-
-Generate complete, working output:
-- Code: Complete, runnable, with comments
-- Reports: Structured, detailed
-- Files: Ready to use
-- Analysis: Actionable insights
-
-Language: { 'Bengali' if lang == 'bn' else 'English' }"""
-
-        result = await self.hub.route_prompt(task, "agents", {"cloud_mode": True})
-        
-        # Enhance with category-specific output
-        from app import generate_category_output  # Will be defined
-        return AgentMessage("assistant", result.get("content", ""), "executor")
-    
-    def _build_context(self, lang: str) -> str:
-        """Build conversation context for agents."""
-        context_parts = [
-            self.get_system_prompt(lang),
-            f"Language: {lang}",
-            f"Files uploaded: {len(self.uploaded_files)}"
-        ]
-        
-        if self.uploaded_files:
-            context_parts.append("Uploaded files:")
-            for f in self.uploaded_files:
-                context_parts.append(f"  - {f['name']}: {f['content'][:200]}...")
-        
-        if self.conversation_history:
-            context_parts.append("Recent conversation:")
-            for msg in self.conversation_history[-6:]:
-                context_parts.append(f"  {msg.agent or msg.role}: {msg.content[:100]}...")
-        
-        return "\n".join(context_parts)
-    
-    async def process_message(self, user_message: str, files: List[str] = None) -> Tuple[str, str, Dict]:
-        """Main entry point: process user message through agent pipeline."""
-        
-        # Process any new files
-        if files:
-            for f in files:
-                self.add_file(f)
-        
-        lang = self.detect_language(user_message)
-        
-        # Add user message to history
-        self.conversation_history.append(AgentMessage("user", user_message))
-        
-        if self.planning_phase:
-            # Phase 1: Planning - Planner creates plan, discusses with user
-            planner_response = await self.planner_agent(user_message, self.detect_language(user_message))
-            self.conversation_history.append(planner_response)
-            
-            # Extract plan from planner response (simplified)
-            self.current_plan = {
-                "user_goal": user_message,
-                "steps": ["Analyze requirements", "Research if needed", "Execute", "Deliver"],
-                "status": "awaiting_approval"
-            }
-            
-            # Return planner's response for user approval
-            return planner_response.content, "planning", {
-                "phase": "planning",
-                "plan": self.current_plan,
-                "lang": lang
-            }
-        else:
-            # Phase 2: Execution - Researcher + Executor
-            if self.current_plan and self.current_plan.get("needs_research"):
-                researcher = await self.researcher_agent(user_message, lang)
-                self.conversation_history.append(researcher)
-            
-            executor = await self.executor_agent(user_message, lang, self.current_plan or {})
-            self.conversation_history.append(executor)
-            
-            # Mark plan complete
-            self.current_plan["status"] = "completed"
-            
-            return executor.content, "execution", {
-                "phase": "execution",
-                "output": executor.content,
-                "lang": lang
-            }
+        # Enhance with detailed output
+        detailed = generate_category_output(category, message, model_name)
+        result.update(detailed)
+        result["auto_category"] = category
+        result["auto_model"] = model_name
+        return result
 
 
 # ==================== GLOBAL ORCHESTRATOR ====================
 
 orchestrator = AgentOrchestrator(hub)
 
-# Category keywords for fallback
 CATEGORY_KEYWORDS = {
-    "coding": ["code", "program", "function", "script", "api", "debug", "python", "javascript", "java", "cpp", "algorithm"],
-    "video": ["video", "movie", "animation", "render", "cinematic", "edit video"],
-    "audio": ["audio", "voice", "speech", "tts", "transcribe", "music", "sound"],
-    "design": ["image", "picture", "design", "logo", "illustration", "art", "generate image"],
-    "research": ["research", "analyze", "report", "study", "investigate", "find information"],
-    "threat-intel": ["threat", "vulnerability", "cve", "malware", "security", "cyber", "attack"],
+    "coding": ["code", "program", "function", "script", "api", "debug", "python", "javascript", "java", "cpp", "algorithm", "database", "sql"],
+    "video": ["video", "movie", "animation", "render", "cinematic", "edit video", "clip"],
+    "audio": ["audio", "voice", "speech", "tts", "transcribe", "music", "sound", "podcast"],
+    "design": ["image", "picture", "design", "logo", "illustration", "art", "generate image", "wallpaper", "icon"],
+    "research": ["research", "analyze", "report", "study", "investigate", "find information", "paper", "survey"],
+    "threat-intel": ["threat", "vulnerability", "cve", "malware", "security", "cyber", "attack", "phishing"],
     "agents": ["agent", "workflow", "orchestrate", "automate", "pipeline", "multi-agent"],
-    "education": ["learn", "teach", "explain", "tutorial", "math", "homework", "concept"],
-    "resume": ["resume", "cv", "cover letter", "job", "freelance", "proposal"],
-    "trading": ["trade", "crypto", "bitcoin", "stock", "market", "invest", "chart"],
+    "education": ["learn", "teach", "explain", "tutorial", "math", "homework", "concept", "understand"],
+    "resume": ["resume", "cv", "cover letter", "job", "freelance", "proposal", "portfolio"],
+    "trading": ["trade", "crypto", "bitcoin", "btc", "eth", "stock", "market", "invest", "chart", "price"],
 }
 
 CATEGORY_ROUTERS = {
@@ -335,16 +140,16 @@ def auto_detect_category(prompt: str) -> str:
 # ==================== OUTPUT GENERATORS ====================
 
 CATEGORY_GENERATORS = {
-    "coding": {"name": "💻 Code", "icon": "💻", "tab": "code"},
-    "video": {"name": "🎬 Video", "icon": "🎬", "tab": "video"},
-    "audio": {"name": "🔊 Audio", "icon": "🔊", "tab": "audio"},
-    "design": {"name": "🎨 Design", "icon": "🎨", "tab": "image"},
-    "research": {"name": "🔬 Research", "icon": "🔬", "tab": "research"},
-    "threat-intel": {"name": "🛡️ Threat Intel", "icon": "🛡️", "tab": "research"},
-    "agents": {"name": "🤖 Agents", "icon": "🤖", "tab": "code"},
-    "education": {"name": "📚 Education", "icon": "📚", "tab": "research"},
-    "resume": {"name": "📄 Resume", "icon": "📄", "tab": "code"},
-    "trading": {"name": "📈 Trading", "icon": "📈", "tab": "crypto"},
+    "coding": {"name": "Code Generation", "icon": "💻", "tab": "code"},
+    "video": {"name": "Video Synthesis", "icon": "🎬", "tab": "video"},
+    "audio": {"name": "Audio & Voice", "icon": "🔊", "tab": "audio"},
+    "design": {"name": "Graphic Design", "icon": "🎨", "tab": "image"},
+    "research": {"name": "Deep Research", "icon": "🔬", "tab": "research"},
+    "threat-intel": {"name": "Threat Intelligence", "icon": "🛡️", "tab": "research"},
+    "agents": {"name": "AI Agents", "icon": "🤖", "tab": "code"},
+    "education": {"name": "Education & Math", "icon": "📚", "tab": "research"},
+    "resume": {"name": "Resume & Freelance", "icon": "📄", "tab": "code"},
+    "trading": {"name": "Trading & Crypto", "icon": "📈", "tab": "crypto"},
 }
 
 
@@ -354,95 +159,248 @@ def generate_category_output(category: str, prompt: str, model: str) -> Dict[str
         "video": lambda p, m: {"type": "video", "tab": "video", "content": {"prompt": p, "model": m, "status": "generating"}},
         "audio": lambda p, m: {"type": "audio", "tab": "audio", "content": {"prompt": p, "model": m, "status": "generating"}},
         "design": lambda p, m: {"type": "image", "tab": "image", "content": {"prompt": p, "model": m, "status": "generating"}},
-        "research": lambda p, m: {"type": "research", "tab": "research", "content": f"# Research: {p}\n\nBy {m}...\n\n## Findings\n1. Key insight\n2. Evidence\n3. Recommendations"},
-        "threat-intel": lambda p, m: {"type": "threat-intel", "tab": "research", "content": f"# Threat Report: {p}\n\nBy {m}...\n## Assessment\nModerate threat\n## IoCs\n- IP: detected\n- Domain: suspicious\n## Recommendations\n1. Block IOCs\n2. Investigate"},
+        "research": lambda p, m: {"type": "research", "tab": "research", "content": f"# Research: {p}\n\nBy {m}...\n\n## Key Findings\n1. Primary insight\n2. Supporting evidence\n3. Recommendations"},
+        "threat-intel": lambda p, m: {"type": "threat-intel", "tab": "research", "content": f"# Threat Report: {p}\n\nBy {m}...\n## Assessment: Moderate\n## IoCs\n- IP: detected\n- Domain: suspicious\n## Actions\n1. Block IOCs\n2. Investigate"},
         "agents": lambda p, m: {"type": "agents", "tab": "code", "content": f"# Agent Workflow: {p}\n\nOrchestrated by {m}..."},
         "education": lambda p, m: {"type": "education", "tab": "research", "content": f"# Learn: {p}\n\nBy {m}...\n## Tutorial\n1. Setup\n2. Implement\n3. Verify"},
         "resume": lambda p, m: {"type": "resume", "tab": "code", "content": f"# Resume: {p}\n\nBy {m}...\n## ATS Resume\n- Skills\n- Experience\n- Proposal"},
         "trading": lambda p, m: {"type": "trading", "tab": "crypto", "content": {"analysis": f"# Trading: {p}\n\nBy {m}...\n## Analysis\nTrend: Bullish\nRSI: 62\nMACD: Buy\nTargets: 1D 65%, 1W 55%"}},
     }
+    return generators.get(category, generators["coding"])(prompt, model)
+
+
+orchestrator = AgentOrchestrator(hub)
+
+
+# ==================== CHAT HANDLER ====================
+
+async def chat_handler(message, history, files, planning_phase_flag, conv_hist, current_plan, lang):
+    """ChatGPT-like natural handler - no planning phase for simple tasks."""
     
-    gen = generators.get(category, generators["coding"])
-    return gen(prompt, model)
+    if not message.strip() and not files:
+        return history, "", planning_phase_flag, current_plan, lang, "Ready", {}, "", None, None, None, "", None
+    
+    # Process files
+    if files:
+        for f in files:
+            orchestrator.add_file(f.name if hasattr(f, 'name') else f)
+    
+    # Detect language
+    full_text = message + " " + " ".join([f.get("content", "") for f in orchestrator.uploaded_files])
+    lang = orchestrator.detect_language(full_text)
+    
+    # --- Simple greetings ---
+    greeting_kws = ["hello", "hi", "hey", "hey there", "hola", "hey!", "hi!", "hello!", "হ্যালো", "হাই", "হাই", "কেমন আছো", "কেমন আছেন", "সালাম", "নমস্কার", "নমস্তে", "assalamualaikum"]
+    if any(kw in message.lower() for kw in greeting_keywords) and len(message.strip().split()) <= 3:
+        responses = {
+            "en": ["Hello! 👋 How can I help you today? I can write code, generate images/videos, do research, analyze data, create documents, and more!",
+                   "Hi there! 👋 What would you like me to help with? Code, images, videos, research, documents - just ask!",
+                   "Hey! 👋 I'm your AI assistant with 47 specialized models. What do you need today?"],
+            "bn": ["হ্যালো! 👋 আজ আমি কীভাবে সাহায্য করতে পারি? কোড, ছবি, ভিডিও, রিসার্চ, ডকুমেন্ট - যেকোনো কিছু করাতে পারেন!",
+                   "হাই! 👋 আপনি কী চান? কোড লিখা, ছবি বানানো, ভিডিও তৈরি, রিসার্চ, অনুবাদ - যেকোনো কথা বলুন!"]
+        }
+        response = random.choice(responses.get(lang, ["Hello! 👋 How can I help?"]))
+        new_history = history + [{"role": "user", "content": message}, {"role": "assistant", "content": response}]
+        return new_history, "", False, {}, lang, "Ready", {}, "", None, None, None, "", None
+    
+    # Simple conversational responses
+    simple_kws = ["thanks", "thank you", "thanks!", "thx", "ok", "okay", "cool", "awesome", "great", "bye", "bye!", "goodbye", "thanks!", "thx", "ধন্যবাদ", "ধন্যবাদ!", "ঠিক আছে", "ঠিক", "বাই", "বিদায়"]
+    if any(kw in message.lower() for kw in simple_responses):
+        responses = {"en": ["You're welcome! 😊 Let me know if you need anything else!", "Anytime! 😊 Happy to help!", "Glad to help! Let me know if you need anything else!"],
+                     "bn": ["আপনাকেও ধন্যবাদ! 😊 আর কিছু লাগলে বলবেন!", "কোন কথা নেই! 😊 আর কিছু দরকার হলে জানাবেন!"]}
+        response = random.choice(responses.get(lang, responses["en"]))
+        new_history = history + [{"role": "user", "content": message}, {"role": "assistant", "content": response}]
+        return new_history, "", False, {}, lang, "Ready", {}, "", None, None, None, "", None
+    
+    # Process files
+    if files:
+        for f in files:
+            orchestrator.add_file(f.name if hasattr(f, 'name') else f)
+    
+    full_text = message + " " + " ".join([f.get("content", "") for f in orchestrator.uploaded_files])
+    lang = orchestrator.detect_language(full_text)
+    
+    try:
+        # Auto-detect category and execute directly
+        category = auto_detect_category(message)
+        model_name = CATEGORY_ROUTERS.get(category, "qwen2.5-coder")
+        
+        # Route through hub
+        result = await hub.route_prompt(message, category, {"cloud_mode": True})
+        detailed = generate_category_output(category, message, MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name)
+        result.update(detailed)
+        
+        gen_info = CATEGORY_GENERATORS.get(category, {"icon": "🤖", "name": "AI Assistant", "tab": "research"})
+        
+        # Format response based on category
+        if detailed.get("type") == "code":
+            response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+Here's your code:
+
+```{detailed.get('language', 'python')}
+{detailed.get('content', '')}
+```"""
+        elif detailed.get("type") in ("research", "threat-intel", "education"):
+            response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+{detailed.get('content', '')}"""
+        elif detailed.get("type") == "trading":
+            response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+{detailed.get('content', {}).get('analysis', '')}"""
+        elif detailed.get("type") in ("agents", "resume"):
+            response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+{detailed.get('content', '')}"""
+        else:
+            response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+✅ **Generating your {gen_info['name'].lower()}...** Check the **{gen_info['tab']}** tab for the result!"""
+        
+        new_history = history + [{"role": "user", "content": message}, {"role": "assistant", "content": response}]
+        
+        return (new_history, "", False, {}, lang, "✅ Done", {"status": "done"},
+                detailed.get("content", ""), 
+                None if detailed.get("type") != "image" else [], 
+                None if detailed.get("type") != "video" else None, 
+                None if detailed.get("type") != "audio" else None, 
+                detailed.get("content", "") if detailed.get("type") in ("research", "threat-intel", "education") else "",
+                None)
+                
+    except Exception as e:
+        error_msg = f"❌ Error: {str(e)}"
+        new_history = history + [{"role": "user", "content": message}, {"role": "assistant", "content": error_msg}]
+        return new_history, "", False, {}, lang, f"❌ Error: {e}", {}, "", None, None, None, "", None
 
 
-# ==================== WEB UI ====================
+# ==================== WEB UI - ChatGPT Style ====================
 
 def create_interface():
     with gr.Blocks(
-        title="Apeiron AI Hub - Multi-Agent",
-        theme=gr.themes.Soft(),
+        title="Apeiron AI",
+        theme=gr.themes.Default(primary_hue="blue", secondary_hue="slate"),
         css="""
-        .chat-wrap {height: 70vh;}
-        .file-preview {max-height: 200px; overflow: auto;}
-        .agent-badge {display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin: 2px;}
-        .planner {background: #e3f2fd; color: #1565c0;}
-        .researcher {background: #f3e5f5; color: #7b1fa2;}
-        .executor {background: #e8f5e9; color: #2e7d32;}
-        .user-msg {background: #f5f5f5;}
+        /* ChatGPT-style styling */
+        #chatbot .message { padding: 12px 16px; border-radius: 12px; max-width: 85%; }
+        #chatbot .user { background: #f0f2f5; margin-left: auto; border-radius: 18px 18px 4px 18px; }
+        #chatbot .assistant { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 18px 18px 18px 4px; }
+        #chatbot .message-content { white-space: pre-wrap; word-wrap: break-word; }
+        .message-row { display: flex; align-items: flex-start; gap: 8px; }
+        .avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+        .user-avatar { background: #10a37f; color: white; }
+        .assistant-avatar { background: #10a37f; color: white; }
+        
+        /* 3-dot menu on hover */
+        .message-wrapper { position: relative; }
+        .message-wrapper:hover .msg-menu { opacity: 1; visibility: visible; }
+        .msg-menu { opacity: 0; visibility: hidden; transition: all 0.2s; position: absolute; right: 8px; top: 8px; z-index: 10; }
+        .msg-menu button { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .msg-menu button:hover { background: #f3f4f6; }
+        
+        /* Clean sidebar */
+        .sidebar { background: #fafafa; border-right: 1px solid #e5e7eb; }
+        .sidebar .gr-button { width: 100%; justify-content: flex-start; text-align: left; border: none; background: transparent; color: #374151; font-size: 14px; padding: 10px 12px; border-radius: 8px; }
+        .sidebar .gr-button:hover { background: #f3f4f6; }
+        .sidebar .gr-button.primary { background: #10a37f; color: white; }
+        
+        /* Input area */
+        .input-area { border-top: 1px solid #e5e7eb; background: #fff; padding: 12px; }
+        
+        /* Hide Gradio chrome */
+        #chatbot { border: none !important; box-shadow: none !important; }
+        .gr-chatbot { border: none !important; }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
         """,
     ) as demo:
         
         # State
-        planning_phase = gr.State(True)
-        conversation_history = gr.State([])
+        planning_phase_state = gr.State(False)
+        current_plan_state = gr.State({})
+        lang_state = gr.State("en")
         uploaded_files_state = gr.State([])
-        current_plan = gr.State({})
-        current_lang = gr.State("en")
         
-        # Header
-        gr.Markdown("# 🏔️ Apeiron Multi-Agent AI Hub")
-        gr.Markdown("**3 Agents • 47 Models • Files + Chat • বাংলা + English**")
+        # Header - minimal
+        with gr.Row(elem_classes="header"):
+            with gr.Column(scale=1):
+                gr.Markdown("### 🤖 Apeiron")
+            with gr.Column(scale=5):
+                pass
+            with gr.Column(scale=1, min_width=100):
+                theme_toggle = gr.Button("🌙", size="sm", variant="secondary")
         
-        with gr.Row():
-            # Left: Chat
-            with gr.Column(scale=3):
-                gr.Markdown("### 💬 Chat with Agent Team")
+        with gr.Row(elem_classes="main-container"):
+            # Left Sidebar - minimal
+            with gr.Column(scale=1, elem_classes="sidebar", min_width=260, max_width=280):
+                gr.Markdown("### 🤖 Apeiron")
+                gr.Markdown("*47 Models • 10 Categories*")
+                gr.HTML("<hr style='margin: 12px 0; border-color: #e5e7eb;'>")
                 
+                # Quick actions as pills
+                with gr.Column():
+                    gr.Markdown("**Quick Actions**")
+                    quick_btns = []
+                    for cat_key, gen in CATEGORY_GENERATORS.items():
+                        btn = gr.Button(f"{gen['icon']} {gen['name']}", size="sm", variant="secondary")
+                        quick_btns.append((btn, cat_key))
+                
+                gr.HTML("<hr style='margin: 16px 0; border-color: #e5e7eb;'>")
+                gr.Markdown("**Upload Files**")
+                file_upload = gr.File(
+                    label="", file_count="multiple",
+                    file_types=[".png", ".jpg", ".jpeg", ".pdf", ".txt", ".py", ".md", ".csv", ".json", ".docx", ".mp4", ".mov", ".mp3", ".wav"],
+                    height=80,
+                )
+                
+                gr.HTML("<hr style='margin: 16px 0; border-color: #e5e7eb;'>")
+                with gr.Row():
+                    clear_btn = gr.Button("🗑️ Clear Chat", size="sm", variant="secondary")
+                    theme_btn = gr.Button("🌙 Dark", size="sm", variant="secondary")
+            
+            # Main Chat Area
+            with gr.Column(scale=5):
+                # Chat display - ChatGPT style
                 chatbot = gr.Chatbot(
-                    label="Agent Team",
-                    height=550,
+                    label="",
+                    height=650,
                     type="messages",
                     avatar_images=("👤", "🤖"),
-                    value=[{"role": "assistant", "content": "👋 স্বাগতম! Welcome to **Apeiron Multi-Agent Hub**!\n\n**৩-এজেন্ট টিম:** Planner 📋 • Researcher 🔬 • Executor ⚡\n**৪৭ মডেল** পটভূমিতে, অটো-সিলেক্ট\n\n**কিভাবে কাজ করে:**\n1️⃣ আপনি লিখেন ( বাংলা / English )\n2️⃣ **Planner** পরিকল্পনা তৈরি করে, আপন থেকে অনুমতি নেয়\n3️⃣ **Researcher** গভীর রিসার্চ করে (যদি লাগে)\n4️⃣ **Executor** সম্পূর্ণ আউটপুট দেয় (কোড/ফাইল/রিপোর্ট)\n\n**ফাইল আপলোড করুন:** ছবি, ভিডিও, পিডিএফ, ডক্স, কোড\n\n**চলে যান!** বাংলা বা ইংরেজি - যেকোনো ভাষায় লিখুন 🚀"}],
-                )
-                
-                with gr.Row():
-                    msg_input = gr.Textbox(
-                        placeholder="লিখুন... (বাংলা বা English) — ফাইল আপলোড করতে 📎 দিন",
-                        scale=5, lines=2, container=False,
-                    )
-                    send_btn = gr.Button("Send 🚀", variant="primary", scale=1)
-                
-                # File upload
-                file_upload = gr.File(
-                    label="📎 Upload Files (images, videos, PDFs, code, docs...)",
-                    file_count="multiple",
-                    file_types=[".png", ".jpg", ".jpeg", ".pdf", ".txt", ".py", ".md", ".csv", ".json", ".docx", ".mp4", ".mov", ".mp3", ".wav"],
-                    height=100,
-                )
-                
-                # Status bar
-                status_bar = gr.Markdown("🟢 **Ready** | Phase: Planning | Lang: Auto")
+                    value=[{"role": "assistant", "content": "Hello! 👋 I'm Apeiron — your AI assistant with **47 specialized models** across 10 categories.\n\n**Just chat naturally.** I'll automatically route to the best model:\n\n💻 **Code** — Python, JS, APIs, algorithms\n🎨 **Design** — Logos, images, illustrations\n🎬 **Video** — Cinematic clips, animations\n🔊 **Audio** — TTS, STT, voice cloning\n🔬 **Research** — Deep analysis, reports\n🛡️ **Threat Intel** — CVEs, malware, incidents\n🤖 **Agents** — Multi-agent workflows\n📚 **Education** — Tutorials, explanations\n📄 **Resume** — ATS CVs, proposals\n📈 **Trading** — Crypto/stock analysis\n\n**Just type what you need.** Upload files with 📎 if needed.\n\n*Try: \"Create a Python web scraper\" or \"Analyze Bitcoin price\""}],
+                elem_id="chatbot",
+                show_copy_button=True,
+                show_share_button=False,
+            )
             
-            # Right: Outputs + Agent Status
-            with gr.Column(scale=2):
-                # Agent Activity
-                gr.Markdown("### 🤖 Agent Activity")
-                agent_status = gr.Markdown("🟢 **Ready** — Waiting for your message")
-                
-                # Current Plan
-                gr.Markdown("### 📋 Current Plan")
-                plan_display = gr.Code(label="Plan", language="yaml", lines=10, interactive=False)
-                
-                # Output Tabs
+            # Input area - ChatGPT style
+            with gr.Row(elem_classes="input-area"):
+                with gr.Column(scale=1, min_width=50):
+                    pass
+                with gr.Column(scale=20):
+                    msg_input = gr.Textbox(
+                        placeholder="Message Apeiron... (Shift+Enter for new line)",
+                        container=False,
+                        lines=1,
+                        max_lines=8,
+                        show_label=False,
+                        autofocus=True,
+                    )
+                with gr.Column(scale=1, min_width=50):
+                    send_btn = gr.Button("➤", variant="primary", size="lg")
+            
+            # Right Panel - Output Tabs
+            with gr.Column(scale=3, min_width=350, max_width=420):
                 with gr.Tabs():
                     with gr.TabItem("💻 Code"):
-                        code_out = gr.Code(label="Code", language="python", lines=15, interactive=False)
+                        code_out = gr.Code(label="", language="python", lines=22, interactive=False, show_line_numbers=True)
                     with gr.TabItem("🖼️ Images"):
-                        img_out = gr.Gallery(label="Images", columns=2, height=250)
+                        img_out = gr.Gallery(label="", columns=2, object_fit="contain", height=350)
                     with gr.TabItem("▶️ Video"):
-                        vid_out = gr.Video(height=200)
+                        vid_out = gr.Video(height=280)
                     with gr.TabItem("🔊 Audio"):
                         aud_out = gr.Audio(type="filepath")
                     with gr.TabItem("📊 Reports"):
@@ -450,215 +408,56 @@ def create_interface():
                     with gr.TabItem("📈 Charts"):
                         cht_out = gr.Plot()
         
-        # Hidden states
-        planning_phase_state = gr.State(True)
-        uploaded_files_state = gr.State([])
+        # States
+        planning_phase_state = gr.State(False)
         current_plan_state = gr.State({})
         lang_state = gr.State("en")
-        conversation_history_state = gr.State([])
+        uploaded_files_state = gr.State([])
         
-        # ==================== HANDLERS ====================
+        # ==================== EVENT HANDLERS ====================
         
-        async def process_upload(files):
-            """Process uploaded files."""
-            if not files:
-                return "No files uploaded", []
-            
+        def process_upload(files):
+            if not files: return "Ready", []
             processed = []
             for f in files:
                 result = FileProcessor.process_file(f.name if hasattr(f, 'name') else f)
                 processed.append(result)
-            
-            return f"✅ {len(processed)} file(s) uploaded", processed
+            return f"✅ {len(processed)} file(s) ready", processed
         
-        async def chat_handler(message, history, files, planning_phase_flag, conv_hist, current_plan, lang):
-            """Main chat handler - natural ChatGPT-like experience with smart agent routing."""
-            
-            if not message.strip() and not files:
-                return history, "", planning_phase_flag, current_plan, lang, "Waiting...", {}, "", None, None, None, "", None
-            
-            # Process files
-            if files:
-                for f in files:
-                    orchestrator.add_file(f.name if hasattr(f, 'name') else f)
-            
-            # Detect language
-            full_text = message + " " + " ".join([f.get("content", "") for f in orchestrator.uploaded_files])
-            lang = orchestrator.detect_language(full_text)
-            
-            # Check for simple greetings/conversational messages - respond naturally
-            greeting_keywords = ["hello", "hi", "hey", "hiya", "hola", "হ্যালো", "হাই", "হাই", "কেমন আছো", "কেমন আছেন", "সালাম", "নমস্কার", "নমস্তে", "assalamualaikum", "waalaikumassalam"]
-            is_greeting = any(kw in message.lower() for kw in greeting_keywords) and len(message.strip().split()) <= 3
-            
-            # Simple conversational responses
-            conversational_responses = {
-                "en": [
-                    "Hello! 👋 How can I help you today? I can create code, generate images/videos, do research, analyze data, write documents, and much more.",
-                    "Hi there! 👋 What can I do for you? Just tell me what you need - code, images, videos, research, analysis, documents, translations, anything!",
-                    "Hey! 👋 I'm your AI assistant with 47 specialized models. What would you like me to help you with today?"
-                ],
-                "bn": [
-                    "হ্যালো! 👋 আজ আমি কীভাবে সাহায্য করতে পারি? কোড, ছবি, ভিডিও, রিসার্চ, ডকুমেন্ট - যেকোনো কিছু করাতে পারেন।",
-                    "হাই! 👋 আপনি কী চান? কোড লিখা, ছবি বানানো, ভিডিও তৈরি, রিসার্চ, অনুবাদ - যেকোনো কথা বলুন!",
-                    "নমস্কার! 👋 আমি ৪৭টি মডেলের সাথে আপনার সাহায্য করতে প্রস্তুত। কী করতে চান?"
-                ]
-            }
-            
-            if is_greeting:
-                import random
-                responses = conversational_responses.get(lang, conversational_responses["en"])
-                response = random.choice(responses)
-                
-                new_history = history + [
-                    {"role": "user", "content": message},
-                    {"role": "assistant", "content": response}
-                ]
-                return new_history, "", planning_phase_flag, current_plan, lang, "💬 Ready", {}, "", None, None, None, "", None
-            
-            # Check if it's a simple conversational follow-up (thanks, ok, bye, etc.)
-            simple_responses = {
-                "en": ["thanks", "thank you", "thanks!", "thx", "ok", "okay", "cool", "awesome", "great", "bye", "goodbye", "see you"],
-                "bn": ["ধন্যবাদ", "ধন্যবাদ!", "ঠিক আছে", "ঠিক", "বাই", "বিদায়", "ধন্যবাদ আপনাকেও"]
-            }
-            is_simple_response = any(r in message.lower() for r in simple_responses.get(lang, simple_responses["en"]))
-            
-            if is_simple_response:
-                responses = {
-                    "en": ["You're welcome! 😊 Let me know if you need anything else!", "Anytime! 😊 Happy to help!", "Glad I could help! Let me know if you need anything else!"],
-                    "bn": ["আপনাকেও ধন্যবাদ! 😊 আর কিছু লাগলে বলবেন!", "কোন কথা নেই! 😊 আর কিছু দরকার হলে জানাবেন!"]
-                }
-                response = random.choice(responses.get(lang, responses["en"]))
-                
-                new_history = history + [
-                    {"role": "user", "content": message},
-                    {"role": "assistant", "content": response}
-                ]
-                return new_history, "", planning_phase_flag, current_plan, lang, "💬 Ready", {}, "", None, None, None, "", None
-            
-            # Process files
-            if files:
-                for f in files:
-                    orchestrator.add_file(f.name if hasattr(f, 'name') else f)
-            
-            # Detect language
-            full_text = message + " " + " ".join([f.get("content", "") for f in orchestrator.uploaded_files])
-            lang = orchestrator.detect_language(full_text)
-            
-            try:
-                # Check if we're in planning phase and user is approving
-                if planning_phase_flag and message.lower().strip() in ["হ্যাঁ", "yes", "yes", "ok", "ঠিক আছে", "চলুন", "approved", "okay"]:
-                    # Execute the plan silently in background
-                    if orchestrator.current_plan and orchestrator.current_plan.get("needs_research"):
-                        await orchestrator.researcher_agent(message, lang)
-                    
-                    executor_resp = await orchestrator.executor_agent(message, lang, orchestrator.current_plan or {})
-                    detailed = generate_category_output(auto_detect_category(message), message, CATEGORY_ROUTERS.get(auto_detect_category(message), "qwen2.5-coder"))
-                    
-                    response = f"""**Task Completed!** ✅
-
-{executor_resp.content}
-
----
-**Outputs generated in tabs →**"""
-                    
-                    detailed = generate_category_output(auto_detect_category(message), message, CATEGORY_ROUTERS.get(auto_detect_category(message), "qwen2.5-coder"))
-                    
-                    new_history = history + [
-                        {"role": "user", "content": message},
-                        {"role": "assistant", "content": response}
-                    ]
-                    
-                    return (new_history, "", False, {}, "en",
-                            "✅ **Complete** — Check tabs for outputs",
-                            {"goal": "completed", "status": "done"},
-                            detailed.get("content", ""), None, None, None, "", None)
-                
-                # For all other messages - auto-detect intent and execute directly
-                # This is the key: we SKIP the planning phase for most tasks and go straight to execution
-                category = auto_detect_category(message)
-                model_name = CATEGORY_ROUTERS.get(category, "qwen2.5-coder")
-                
-                # Route through hub silently
-                hub_result = await hub.route_prompt(
-                    prompt=message,
-                    category=category,
-                    preferences={"cloud_mode": True},
-                )
-                
-                # Get detailed output for tabs
-                detailed = generate_category_output(category, message, MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name)
-                
-                # Get generator info for response formatting
-                gen_info = CATEGORY_GENERATORS.get(category, {"icon": "🤖", "name": "AI Assistant", "tab": "research"})
-                
-                # Format natural response based on category
-                if detailed.get("type") == "code":
-                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
-
-Here's your code:
-
-```{detailed.get('language', 'python')}
-{detailed.get('content', '')}
-```"""
-                elif detailed.get("type") in ("research", "threat-intel", "education"):
-                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
-
-{detailed.get('content', '')}"""
-                elif detailed.get("type") == "trading":
-                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
-
-{detailed.get('content', {}).get('analysis', '')}"""
-                elif detailed.get("type") in ("agents", "resume"):
-                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
-
-{detailed.get('content', '')}"""
-                else:
-                    # For video, audio, image, design
-                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
-
-✅ **Generating your {gen_info['name'].lower()}...** Check the **{gen_info['tab']}** tab for the result!"""
-                
-                new_history = history + [
-                    {"role": "user", "content": message},
-                    {"role": "assistant", "content": response}
-                ]
-                
-                return (new_history, "", False, {}, lang,
-                        "✅ **Done** — Check tabs for results",
-                        {"goal": "completed", "status": "done"},
-                        detailed.get("content", ""), 
-                        None if detailed.get("type") != "image" else [], 
-                        None if detailed.get("type") != "video" else None, 
-                        None if detailed.get("type") != "audio" else None, 
-                        detailed.get("content", "") if detailed.get("type") in ("research", "threat-intel", "education", "threat-intel") else "",
-                        None)
-                        
-            except Exception as e:
-                error_msg = f"❌ Error: {str(e)}"
-                new_history = history + [
-                    {"role": "user", "content": message},
-                    {"role": "assistant", "content": error_msg}
-                ]
-                return new_history, "", planning_phase_flag, current_plan, lang, f"❌ Error: {e}", {}, "", None, None, None, "", None
+        async def handle_send(message, history, files, planning_flag, conv_hist, current_plan, lang):
+            return await chat_handler(message, history, files, False, [], {}, lang)
         
-        # Event handlers
+        # Event wiring
         send_btn.click(
-            fn=chat_handler,
-            inputs=[msg_input, chatbot, file_upload, planning_phase_state, conversation_history_state, current_plan_state, lang_state],
-            outputs=[chatbot, msg_input, planning_phase_state, current_plan_state, lang_state, status_bar, plan_display, code_out, img_out, vid_out, aud_out, rpt_out, cht_out],
+            fn=handle_send,
+            inputs=[msg_input, chatbot, file_upload, gr.State(False), gr.State([]), gr.State({}), lang_state],
+            outputs=[chatbot, msg_input, gr.State(False), gr.State({}), lang_state, 
+                     gr.State("Ready"), gr.State({}), code_out, img_out, vid_out, aud_out, gr.State(""), gr.State(None)],
         )
         
         msg_input.submit(
-            fn=chat_handler,
-            inputs=[msg_input, chatbot, file_upload, planning_phase_state, conversation_history_state, current_plan_state, lang_state],
-            outputs=[chatbot, msg_input, planning_phase_state, current_plan_state, lang_state, status_bar, plan_display, code_out, img_out, vid_out, aud_out, rpt_out, cht_out],
+            fn=handle_send,
+            inputs=[msg_input, chatbot, file_upload, gr.State(False), gr.State([]), gr.State({}), lang_state],
+            outputs=[chatbot, msg_input, gr.State(False), gr.State({}), lang_state,
+                     gr.State("Ready"), gr.State({}), code_out, img_out, vid_out, aud_out, gr.State(""), gr.State(None)],
         )
         
-        file_upload.change(
-            fn=process_upload,
-            inputs=[file_upload],
-            outputs=[status_bar, uploaded_files_state],
-        )
+        file_upload.change(fn=process_upload, inputs=[file_upload], outputs=[gr.State("Ready"), gr.State([])])
+        
+        def clear_chat():
+            return [], "", False, {}, "en", "Ready", {}, "", None, None, None, "", None
+        
+        clear_btn.click(fn=clear_chat, outputs=[chatbot, msg_input, gr.State(False), gr.State({}), lang_state, gr.State("Ready"), gr.State({}), code_out, img_out, vid_out, aud_out, gr.State(""), gr.State(None)])
+        
+        # Quick action buttons
+        for btn, cat in quick_btns:
+            btn.click(fn=lambda c=cat: (f"Quick: {CATEGORY_GENERATORS[c]['name']}", c), 
+                     outputs=[msg_input, gr.State("")])
+        
+        def toggle_theme():
+            return gr.update()
+        theme_btn.click(fn=toggle_theme, outputs=[])
+        theme_toggle.click(fn=toggle_theme, outputs=[])
         
         return demo
 
