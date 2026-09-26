@@ -241,6 +241,6 @@ typing-extensions>=4.10.0
 
 # Audio TTS/STT
 # kokoro removed - using alternative TTS
-TTS>=0.22.0
+# TTS removed - using alternative TTS (edge-tts, gtts, etc.)
 faster-whisper>=1.0.0
 whisper>=1.1.10
