@@ -472,7 +472,7 @@ def create_interface():
             return f"✅ {len(processed)} file(s) uploaded", processed
         
         async def chat_handler(message, history, files, planning_phase_flag, conv_hist, current_plan, lang):
-            """Main chat handler with agent orchestration."""
+            """Main chat handler - natural ChatGPT-like experience with smart agent routing."""
             
             if not message.strip() and not files:
                 return history, "", planning_phase_flag, current_plan, lang, "Waiting...", {}, "", None, None, None, "", None
@@ -486,107 +486,152 @@ def create_interface():
             full_text = message + " " + " ".join([f.get("content", "") for f in orchestrator.uploaded_files])
             lang = orchestrator.detect_language(full_text)
             
+            # Check for simple greetings/conversational messages - respond naturally
+            greeting_keywords = ["hello", "hi", "hey", "hiya", "hola", "হ্যালো", "হাই", "হাই", "কেমন আছো", "কেমন আছেন", "সালাম", "নমস্কার", "নমস্তে", "assalamualaikum", "waalaikumassalam"]
+            is_greeting = any(kw in message.lower() for kw in greeting_keywords) and len(message.strip().split()) <= 3
+            
+            # Simple conversational responses
+            conversational_responses = {
+                "en": [
+                    "Hello! 👋 How can I help you today? I can create code, generate images/videos, do research, analyze data, write documents, and much more.",
+                    "Hi there! 👋 What can I do for you? Just tell me what you need - code, images, videos, research, analysis, documents, translations, anything!",
+                    "Hey! 👋 I'm your AI assistant with 47 specialized models. What would you like me to help you with today?"
+                ],
+                "bn": [
+                    "হ্যালো! 👋 আজ আমি কীভাবে সাহায্য করতে পারি? কোড, ছবি, ভিডিও, রিসার্চ, ডকুমেন্ট - যেকোনো কিছু করাতে পারেন।",
+                    "হাই! 👋 আপনি কী চান? কোড লিখা, ছবি বানানো, ভিডিও তৈরি, রিসার্চ, অনুবাদ - যেকোনো কথা বলুন!",
+                    "নমস্কার! 👋 আমি ৪৭টি মডেলের সাথে আপনার সাহায্য করতে প্রস্তুত। কী করতে চান?"
+                ]
+            }
+            
+            if is_greeting:
+                import random
+                responses = conversational_responses.get(lang, conversational_responses["en"])
+                response = random.choice(responses)
+                
+                new_history = history + [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": response}
+                ]
+                return new_history, "", planning_phase_flag, current_plan, lang, "💬 Ready", {}, "", None, None, None, "", None
+            
+            # Check if it's a simple conversational follow-up (thanks, ok, bye, etc.)
+            simple_responses = {
+                "en": ["thanks", "thank you", "thanks!", "thx", "ok", "okay", "cool", "awesome", "great", "bye", "goodbye", "see you"],
+                "bn": ["ধন্যবাদ", "ধন্যবাদ!", "ঠিক আছে", "ঠিক", "বাই", "বিদায়", "ধন্যবাদ আপনাকেও"]
+            }
+            is_simple_response = any(r in message.lower() for r in simple_responses.get(lang, simple_responses["en"]))
+            
+            if is_simple_response:
+                responses = {
+                    "en": ["You're welcome! 😊 Let me know if you need anything else!", "Anytime! 😊 Happy to help!", "Glad I could help! Let me know if you need anything else!"],
+                    "bn": ["আপনাকেও ধন্যবাদ! 😊 আর কিছু লাগলে বলবেন!", "কোন কথা নেই! 😊 আর কিছু দরকার হলে জানাবেন!"]
+                }
+                response = random.choice(responses.get(lang, responses["en"]))
+                
+                new_history = history + [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": response}
+                ]
+                return new_history, "", planning_phase_flag, current_plan, lang, "💬 Ready", {}, "", None, None, None, "", None
+            
+            # Process files
+            if files:
+                for f in files:
+                    orchestrator.add_file(f.name if hasattr(f, 'name') else f)
+            
+            # Detect language
+            full_text = message + " " + " ".join([f.get("content", "") for f in orchestrator.uploaded_files])
+            lang = orchestrator.detect_language(full_text)
+            
             try:
-                if planning_phase_flag:
-                    # Planning phase
-                    planner_resp = await orchestrator.planner_agent(message, lang)
+                # Check if we're in planning phase and user is approving
+                if planning_phase_flag and message.lower().strip() in ["হ্যাঁ", "yes", "yes", "ok", "ঠিক আছে", "চলুন", "approved", "okay"]:
+                    # Execute the plan silently in background
+                    if orchestrator.current_plan and orchestrator.current_plan.get("needs_research"):
+                        await orchestrator.researcher_agent(message, lang)
                     
-                    # Create plan
-                    plan = {
-                        "goal": message,
-                        "steps": ["Analyze requirements", "Research if needed", "Execute with best models", "Deliver complete output"],
-                        "status": "awaiting_approval",
-                        "needs_research": "research" in message.lower() or "analyze" in message.lower()
-                    }
+                    executor_resp = await orchestrator.executor_agent(message, lang, orchestrator.current_plan or {})
+                    detailed = generate_category_output(auto_detect_category(message), message, CATEGORY_ROUTERS.get(auto_detect_category(message), "qwen2.5-coder"))
                     
-                    # Format response
-                    response = f"""📋 **Planner Agent** 📋
-            
-            {planner_resp.content}
-            
-            ---
-            **Proposed Plan:**
-            1. Analyze requirements & files
-            2. Research best approaches (if needed)
-            3. Execute with best models from 47
-            3. Deliver complete output in tabs
-            
-            **Reply 'হ্যাঁ/yes/ok' to approve, or suggest changes.**"""
-            
+                    response = f"""**Task Completed!** ✅
+
+{executor_resp.content}
+
+---
+**Outputs generated in tabs →**"""
+                    
+                    detailed = generate_category_output(auto_detect_category(message), message, CATEGORY_ROUTERS.get(auto_detect_category(message), "qwen2.5-coder"))
+                    
                     new_history = history + [
                         {"role": "user", "content": message},
                         {"role": "assistant", "content": response}
                     ]
                     
-                    plan_display = f"""goal: "{message}"
-            steps:
-              - "Analyze requirements & uploaded files"
-              - "Research best approaches (if needed)"
-              - "Execute with optimal models from 47"
-              - "Deliver complete output in tabs"
-            status: "awaiting_approval"
-            needs_research: true"""
-            
-                    return (new_history, "", True, plan, "bn" if "bn" in lang else "en", 
-                            "📋 **Planner** active — Awaiting your approval",
-                            plan_display, "", None, None, None, "", None)
+                    return (new_history, "", False, {}, "en",
+                            "✅ **Complete** — Check tabs for outputs",
+                            {"goal": "completed", "status": "done"},
+                            detailed.get("content", ""), None, None, None, "", None)
                 
+                # For all other messages - auto-detect intent and execute directly
+                # This is the key: we SKIP the planning phase for most tasks and go straight to execution
+                category = auto_detect_category(message)
+                model_name = CATEGORY_ROUTERS.get(category, "qwen2.5-coder")
+                
+                # Route through hub silently
+                hub_result = await hub.route_prompt(
+                    prompt=message,
+                    category=category,
+                    preferences={"cloud_mode": True},
+                )
+                
+                # Get detailed output for tabs
+                detailed = generate_category_output(category, message, MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name)
+                
+                # Get generator info for response formatting
+                gen_info = CATEGORY_GENERATORS.get(category, {"icon": "🤖", "name": "AI Assistant", "tab": "research"})
+                
+                # Format natural response based on category
+                if detailed.get("type") == "code":
+                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+Here's your code:
+
+```{detailed.get('language', 'python')}
+{detailed.get('content', '')}
+```"""
+                elif detailed.get("type") in ("research", "threat-intel", "education"):
+                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+{detailed.get('content', '')}"""
+                elif detailed.get("type") == "trading":
+                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+{detailed.get('content', {}).get('analysis', '')}"""
+                elif detailed.get("type") in ("agents", "resume"):
+                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+{detailed.get('content', '')}"""
                 else:
-                    # Execution phase
-                    # Check if user approved
-                    if message.lower().strip() in ["হ্যাঁ", "yes", "yes", "ok", "ঠিক আছে", "চলুন", "approved"]:
-                        # Execute plan
-                        agent_status = "🔬 **Researcher** researching..."
-                        
-                        # Research if needed
-                        research_result = None
-                        if orchestrator.current_plan and orchestrator.current_plan.get("needs_research"):
-                            researcher = await orchestrator.researcher_agent(message, lang)
-                        
-                        # Execute
-                        executor_resp = await orchestrator.executor_agent(message, lang, orchestrator.current_plan or {})
-                        
-                        # Enhance with detailed output
-                        cat = "coding"  # default
-                        model = "qwen2.5-coder"
-                        detailed = generate_category_output("coding", message, "qwen2.5-coder")
-                        
-                        response = f"""⚡ **Executor Agent** ⚡
-            
-            **Task Completed!** ✅
-            
-            {executor_resp.content}
-            
-            ---
-            
-            **Outputs generated in tabs →**"""
-            
-                        # Prepare outputs for tabs
-                        detailed = generate_category_output("coding", message, "qwen2.5-coder")
-                        
-                        new_history = history + [
-                            {"role": "user", "content": message},
-                            {"role": "assistant", "content": response}
-                        ]
-                        
-                        return (new_history, "", False, {}, "en",
-                                "✅ **Complete** — Check tabs for outputs",
-                                {"goal": "completed", "status": "done"},
-                                detailed.get("content", ""), None, None, None, "", None)
-                    
-                    else:
-                        # User wants changes to plan
-                        planner_resp = await orchestrator.planner_agent(f"User wants changes: {message}. Adjust plan.", lang)
-                        response = f"""📋 **Planner Agent** (Revised)
-            
-            {planner_resp.content}
-            
-            **Reply 'হ্যাঁ/yes' to approve revised plan.**"""
-                        new_history = history + [
-                            {"role": "user", "content": message},
-                            {"role": "assistant", "content": response}
-                        ]
-                        return new_history, "", True, plan, lang, "📋 **Planner** revised — Awaiting approval", plan_display, "", None, None, None, "", None
+                    # For video, audio, image, design
+                    response = f"""**{gen_info['icon']} {gen_info['name']}** (via {MODELS[CATEGORY_ROUTERS.get(category, "qwen2.5-coder")].name})
+
+✅ **Generating your {gen_info['name'].lower()}...** Check the **{gen_info['tab']}** tab for the result!"""
+                
+                new_history = history + [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": response}
+                ]
+                
+                return (new_history, "", False, {}, lang,
+                        "✅ **Done** — Check tabs for results",
+                        {"goal": "completed", "status": "done"},
+                        detailed.get("content", ""), 
+                        None if detailed.get("type") != "image" else [], 
+                        None if detailed.get("type") != "video" else None, 
+                        None if detailed.get("type") != "audio" else None, 
+                        detailed.get("content", "") if detailed.get("type") in ("research", "threat-intel", "education", "threat-intel") else "",
+                        None)
                         
             except Exception as e:
                 error_msg = f"❌ Error: {str(e)}"
