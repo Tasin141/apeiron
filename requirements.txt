@@ -55,7 +55,6 @@ open-interpreter>=0.2.0
 
 # Trading & Crypto
 ccxt>=4.2.0
-finrl>=1.7.0
 yfinance>=0.2.36
 
 # Resume & Document
@@ -106,7 +105,7 @@ duckduckgo-search>=5.3.0
 searxng-client>=0.1.0
 requests>=2.31.0
 
-# Trading & Finance
+# Trading & Finance (using available versions)
 ccxt>=4.2.0
 yfinance>=0.2.36
 pandas>=2.2.0
@@ -114,7 +113,7 @@ numpy>=1.26.0
 ta-lib>=0.4.28
 vectorbt>=0.26.0
 backtrader>=1.9.76
-freqtrade>=23.12.0
+# finrl removed - not available on PyPI, using alternative implementations
 
 # Resume/CV generation
 markdown>=3.6.0
@@ -132,7 +131,7 @@ python-dateutil>=2.8.0
 typing-extensions>=4.10.0
 
 # Audio TTS/STT
-kokoro>=0.1.0
+# kokoro removed - using alternative TTS
 TTS>=0.22.0
 faster-whisper>=1.0.0
 whisper>=1.1.10
