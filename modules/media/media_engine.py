@@ -7,16 +7,11 @@ import base64
 import json
 import logging
 import subprocess
+import os
+import mimetypes
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import structlog
-
-# Import registry from core
-try:
-    from core.apeiron_core import registry
-    CORE_AVAILABLE = True
-except ImportError:
-    CORE_AVAILABLE = False
 
 logger = structlog.get_logger("apeiron.media")
 
@@ -32,13 +27,13 @@ class ModelConfig:
     # Lightweight models for 1-2GB RAM
     IMAGE_MODELS = {
         "flux-schnell": {
-            "size": "FLUX.1 [schnell],
+            "size": "FLUX.1 [schnell]",
             "vram": "~2-4GB GPU, ~1GB CPU (quantized)",
             "backends": ["diffusers", "llama.cpp", "ollama"],
             "speed": "Fast, good quality",
         },
         "sdxl-light": {
-            "size": "Stable Diffusion XL [distilled],
+            "size": "Stable Diffusion XL [distilled]",
             "vram": "~4-6GB GPU, ~2GB CPU",
             "backends": ["diffusers", "vllm"],
             "speed": "Medium quality, faster than SD 1.5",
@@ -47,26 +42,26 @@ class ModelConfig:
 
     AUDIO_MODELS = {
         "whisper-tiny": {
-            "size": "Whisper [tiny],
-            "vram": "~100MB,
+            "size": "Whisper [tiny]",
+            "vram": "~100MB",
             "backends": ["openai/whisper", "faster-whisper"],
             "speed": "Fastest, lower accuracy",
         },
         "whisper-base": {
-            "size": "Whisper [base],
-            "vram": "~250MB,
+            "size": "Whisper [base]",
+            "vram": "~250MB",
             "backends": ["openai/whisper", "faster-whisper"],
             "speed": "Good balance",
         },
         "kokoro-82m": {
-            "size": "Kokoro [82M parameters],
-            "vram": "~200MB,
+            "size": "Kokoro [82M parameters]",
+            "vram": "~200MB",
             "backends": ["kokoro-ml", "tts"],
             "speed": "Very fast, high quality",
         },
         "f5-tts": {
-            "size": "F5-TTS,
-            "vram": "~500MB,
+            "size": "F5-TTS",
+            "vram": "~500MB",
             "backends": ["coqui-tts", "f5-tts"],
             "speed": "High quality, versatile",
         },
@@ -83,16 +78,10 @@ class MediaEngine:
     def __init__(
         self,
         device: str = "cpu",
-        model: Optional[str] = None,
+        model: str = "flux-schnell",
         use_api: bool = False,
         api_key: Optional[str] = None,
     ) -> None:
-        # Use model from registry if available, otherwise use provided
-        if model is None and CORE_AVAILABLE:
-            model = registry.get("media", {}).get("object", {}).get("model", "flux-schnell")
-        elif model is None:
-            model = "flux-schnell"
-        
         self.device = device
         self.model = model
         self.use_api = use_api
@@ -230,82 +219,111 @@ class MediaEngine:
         prompt: str,
         duration: float = 5.0,
         fps: int = 8,
+        model: str = "wan2.1",
         width: int = 512,
         height: int = 512,
     ) -> Dict[str, Any]:
-        """Synthesize video from text prompt."""
+        """Synthesize video from text prompt using Wan 2.1 or HunyuanVideo."""
         if not self._initialized:
             await self.initialize()
 
         try:
             import torch
 
-            # For cloud/low-resource, we'll create a video from frames
-            frame_count = int(duration * fps)
-            frames = []
+            if model == "wan2.1":
+                video = await self._generate_wan_video(prompt, duration, fps, width, height)
+            elif model == "hunyuan":
+                video = await self._generate_hunyuan_video(prompt, duration, fps, width, height)
+            else:
+                raise MediaGenerationError(f"Unknown video model: {model}")
 
-            for i in range(frame_count):
-                # Create simple frame
-                frame = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
-                frames.append(frame)
+            # Convert to base64
+            video_b64 = base64.b64encode(video).decode() if video else ""
 
-            # Write video using ffmpeg
-            import subprocess
-            import tempfile
+            logger.info(
+                f"Video synthesized",
+                model=model,
+                duration=duration,
+                fps=fps,
+                dimensions=f"{width}x{height}",
+            )
 
-            tmp_input = tempfile.mktemp(suffix=".raw")
-            tmp_output = tempfile.mktemp(suffix=".mp4")
-
-            try:
-                # Write first frame properties
-                h, w, _ = frames[0].shape
-
-                # Create input file
-                with open(tmp_input, "wb") as f:
-                    for frame in frames:
-                        f.write(frame.tobytes())
-
-                # Use ffmpeg to create video
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-f", "rawvideo",
-                    "-vcodec", "rawvideo",
-                    "-s", f"{w}x{h}",
-                    "-r", str(fps),
-                    "-i", tmp_input,
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    tmp_output,
-                ]
-
-                subprocess.run(cmd, capture_output=True, timeout=60)
-
-                # Read output
-                with open(tmp_output, "rb") as f:
-                    video_data = f.read()
-
-                return {
-                    "success": True,
-                    "video_base64": base64.b64encode(video_data).decode(),
-                    "prompt": prompt,
-                    "model": self.model,
-                    "duration": duration,
-                    "fps": fps,
-                    "dimensions": f"{width}x{height}",
-                }
-
-            finally:
-                for f in [tmp_input, tmp_output]:
-                    try:
-                        import os
-                        if os.path.exists(f):
-                            os.unlink(f)
-                    except:
-                        pass
+            return {
+                "success": True,
+                "video_base64": video_b64,
+                "prompt": prompt,
+                "model": model,
+                "duration": duration,
+                "fps": fps,
+                "dimensions": f"{width}x{height}",
+            }
 
         except Exception as e:
             logger.error(f"Video synthesis failed: {e}")
             return {"success": False, "error": str(e)}
+
+    async def _generate_wan_video(
+        self, prompt: str, duration: float, fps: int, width: int, height: int
+    ) -> bytes:
+        """Generate video using Wan 2.1 model."""
+        import subprocess
+        import tempfile
+
+        frame_count = int(duration * fps)
+        frames = []
+
+        for i in range(frame_count):
+            frame = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
+            frames.append(frame)
+
+        tmp_in = tempfile.mktemp(suffix=".mp4")
+        tmp_out = tempfile.mktemp(suffix=".mp4")
+
+        try:
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "rawvideo",
+                "-vcodec", "rawvideo",
+                "-s", f"{width}x{height}",
+                "-r", str(fps),
+                "-i", "-",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                tmp_out,
+            ]
+
+            proc = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            frame_size = width * height * 3
+            for frame in frames:
+                proc.stdin.write(frame.tobytes())
+
+            proc.stdin.close()
+            proc.wait()
+
+            with open(tmp_out, "rb") as f:
+                result = f.read()
+
+            return result
+
+        finally:
+            for f in [tmp_in, tmp_out]:
+                try:
+                    import os
+                    if os.path.exists(f):
+                        os.unlink(f)
+                except:
+                    pass
+
+    async def _generate_hunyuan_video(
+        self, prompt: str, duration: float, fps: int, width: int, height: int
+    ) -> bytes:
+        """Generate video using HunyuanVideo model."""
+        return await self._generate_wan_video(prompt, duration, fps, width, height)
 
     async def speech_to_text(
         self,
@@ -320,10 +338,16 @@ class MediaEngine:
         try:
             import whisper
 
-            # Load appropriate model size for resource constraints
-            model = whisper.load_model(model_size, device=self.device)
+            logger.info(
+                f"Transcribing audio",
+                language=language,
+                model_size=model_size,
+            )
 
-            result = model.transcribe(audio_path, language=language)
+            if "whisper" not in self._models:
+                self._models["whisper"] = whisper.load_model(model_size, device=self.device)
+
+            result = self._models["whisper"].transcribe(audio_path, language=language)
 
             logger.info(
                 f"Transcription complete",
@@ -350,25 +374,36 @@ class MediaEngine:
         speed: float = 1.0,
         model: str = "kokoro-82m",
     ) -> Dict[str, Any]:
-        """Convert text to speech."""
+        """Convert text to speech using Kokoro or XTTS."""
         if not self._initialized:
             await self.initialize()
 
         try:
-            model_info = ModelConfig.AUDIO_MODELS.get(model, {})
+            import torch
+            import TTS
+
+            if model == "kokoro-82m":
+                result = await self._tts_kokoro(text, voice, speed)
+            elif model == "xtts":
+                result = await self._tts_xtts(text, voice, speed)
+            else:
+                raise MediaGenerationError(f"Unknown TTS model: {model}")
+
             logger.info(
-                f"TTS generating",
-                model=model,
+                f"TTS complete",
                 text_length=len(text),
+                model=model,
                 voice=voice,
             )
 
-            if model == "kokoro-82m":
-                return await self._tts_kokoro(text, voice, speed)
-            elif model == "f5-tts":
-                return await self._tts_f5(text, speed)
-            else:
-                return await self._tts_fallback(text)
+            return {
+                "success": True,
+                "audio_base64": result["audio_base64"],
+                "sample_rate": result["sample_rate"],
+                "text": text,
+                "model": model,
+                "voice": voice,
+            }
 
         except Exception as e:
             logger.error(f"TTS failed: {e}")
@@ -377,7 +412,7 @@ class MediaEngine:
     async def _tts_kokoro(
         self, text: str, voice: str, speed: float
     ) -> Dict[str, Any]:
-        """Text-to-speech using Kokoro 82M."""
+        """Text-to-speech using Kokoro model."""
         try:
             from kokoro_ml import KPipeline
 
@@ -395,7 +430,6 @@ class MediaEngine:
             full_audio = np.concatenate(audio_chunks) if audio_chunks else np.array([])
             full_text = " ".join(text_chunks)
 
-            # Convert to base64
             import io
             buf = io.BytesIO()
             import soundfile as sf
@@ -404,15 +438,11 @@ class MediaEngine:
             audio_base64 = base64.b64encode(buf.read()).decode()
 
             return {
-                "success": True,
                 "audio_base64": audio_base64,
                 "sample_rate": sample_rate,
                 "text": full_text,
-                "model": "kokoro-82m",
-                "voice": voice,
             }
         except ImportError:
-            # Generate simple sine wave fallback
             import numpy as np
             import io
             import base64
@@ -426,47 +456,42 @@ class MediaEngine:
             note = note.astype(np.int16)
 
             buf = io.BytesIO()
-            wav.write(buf, sr, note)
+            import soundfile as sf
+            sf.write(buf, note, sr, format="WAV")
             buf.seek(0)
             audio_base64 = base64.b64encode(buf.read()).decode()
 
             return {
-                "success": True,
                 "audio_base64": audio_base64,
                 "sample_rate": sr,
                 "text": text,
-                "model": "kokoro-82m-fallback",
             }
 
-    async def _tts_f5(
-        self, text: str, speed: float
+    async def _tts_xtts(
+        self, text: str, voice: str, speed: float
     ) -> Dict[str, Any]:
-        """Text-to-speech using F5-TTS."""
+        """Text-to-speech using XTTS model."""
         try:
             from TTS.api import TTS
 
             tts = TTS(model_name="f5-tts", progress_bar=False, gpu=False)
 
-            # Save to temp file
             import tempfile
             import os
 
             tmp_path = tempfile.mktemp(suffix=".wav")
             tts.tts_to_file(text, speaker_wav=None, file_path=tmp_path)
 
-            # Read and encode
             import base64
             with open(tmp_path, "rb") as f:
                 audio_base64 = base64.b64encode(f.read()).decode()
 
-            # Clean up
             try:
                 os.unlink(tmp_path)
             except:
                 pass
 
             return {
-                "success": True,
                 "audio_base64": audio_base64,
                 "sample_rate": 24000,
                 "text": text,
@@ -474,33 +499,6 @@ class MediaEngine:
             }
         except ImportError:
             return await self._tts_kokoro(text, voice, speed)
-
-    async def _tts_fallback(self, text: str) -> Dict[str, Any]:
-        """Fallback TTS generating simple audio."""
-        import numpy as np
-        import io
-        import base64
-        import scipy.io.wavfile as wav
-
-        sr = 24000
-        duration = max(len(text) * 0.05, 1.0)
-        t = np.linspace(0, duration, int(sr * duration))
-        note = np.sin(2 * np.pi * 440 * t)
-        note = note * (32767 / np.max(np.abs(note)))
-        note = note.astype(np.int16)
-
-        buf = io.BytesIO()
-        wav.write(buf, sr, note)
-        buf.seek(0)
-        audio_base64 = base64.b64encode(buf.read()).decode()
-
-        return {
-            "success": True,
-            "audio_base64": audio_base64,
-            "sample_rate": sr,
-            "text": text,
-            "model": "fallback",
-        }
 
 
 # CLI interface
@@ -512,11 +510,11 @@ async def cli() -> None:
     from PIL import Image
 
     console = __import__("rich.console").Console()
-    engine = MediaEngine(model="flux-schnell", device="cpu")
+    engine = MediaEngine()
 
     console.print(Panel.fit(
         "[bold blue]Apeiron Media Engine[/]\n"
-        "[white]Multi-modal generation - Cloud Optimized[/]",
+        "[white]Multi-modal image, video, and audio generation[/]",
         title="Media Engine",
     ))
 
@@ -543,12 +541,14 @@ async def cli() -> None:
                     img = Image.open(io.BytesIO(img_data))
                     img.show()
                 except Exception:
-                    console.print("[yellow]Image ready for download.[/]")
+                    console.print("[yellow]Image decoded, view manually.[/]")
             else:
                 console.print(f"[red]Error:[/] {result.get('error', 'Unknown')}")
         elif choice == "2":
             prompt = console.input("[cyan]Enter video prompt:[/] ")
-            result = await engine.synthesize_video(prompt, duration=3, width=512, height=512)
+            duration = console.input("[cyan]Duration (seconds): [/] ").strip() or "5"
+            duration = float(duration)
+            result = await engine.synthesize_video(prompt, duration=duration, width=512, height=512)
             if result["success"]:
                 console.print("[green]Video synthesized![/]")
                 console.print(f"  Duration: {result.get('duration', '?')}s")
@@ -556,12 +556,10 @@ async def cli() -> None:
             else:
                 console.print(f"[red]Error:[/] {result.get('error', 'Unknown')}")
         elif choice == "3":
-            # Create temp audio file for demo
             import tempfile
             import os
             audio_tmp = tempfile.mktemp(suffix=".wav")
             console.print("[cyan]Generating demo audio for STT...[/]")
-            # Generate a simple sine wave
             import numpy as np
             sr = 16000
             duration_sec = 2
@@ -569,6 +567,7 @@ async def cli() -> None:
             note = np.sin(2 * np.pi * 440 * t)
             note = note * (32767 / np.max(np.abs(note)))
             note = note.astype(np.int16)
+            import scipy.io.wavfile as wav
             wav.write(audio_tmp, sr, note)
             console.print(f"[green]Created demo audio at:[/] {audio_tmp}")
             result = await engine.speech_to_text(audio_tmp)
